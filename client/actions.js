@@ -84,7 +84,7 @@ export async function savePassword() {
         const response = await fetch('/api/secrets/write', {
             method: 'POST',
             headers: getRequestHeaders(),
-            body: JSON.stringify({ key: SECRET_KEY, value, label: '聊天云同步 (WebDAV)' }),
+            body: JSON.stringify({ key: SECRET_KEY, value, label: 'WebDAV Chat Backup' }),
         });
         if (!response.ok) throw new Error('密码保存失败');
         getSettings().passwordSaved = true;

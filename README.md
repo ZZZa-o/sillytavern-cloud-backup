@@ -1,6 +1,6 @@
-# 聊天云同步 · WebDAV Chat Backup
+# WebDAV Chat Backup for SillyTavern
 
-一个用于 SillyTavern 的 WebDAV 聊天同步与备份扩展，在酒馆的“扩展”页面显示为「聊天云同步」。它把前端扩展面板和一个很小的服务端辅助插件组合在一起，避免浏览器直连 WebDAV 时常见的跨域问题。
+一个用于 SillyTavern 的 WebDAV 聊天同步与备份扩展。它把前端扩展面板和一个很小的服务端辅助插件组合在一起，避免浏览器直连 WebDAV 时常见的跨域问题。
 
 扩展入口在 SillyTavern 的“扩展”页面内。WebDAV 地址由用户手动填写，不内置坚果云、InfiniCLOUD 或其他服务商的固定地址。
 
@@ -123,7 +123,7 @@ git clone https://github.com/ZZZa-o/sillytavern-webdav-chat-backup.git public/sc
 
 4. 重启 SillyTavern。
 
-5. 进入 SillyTavern 的“扩展”页面，展开「聊天云同步」。
+5. 进入 SillyTavern 的“扩展”页面，展开 `WebDAV Chat Backup`。
 
 ### 关于自动更新
 
