@@ -1,6 +1,6 @@
 {
     "name": "sillytavern-webdav-chat-backup",
-    "version": "1.2.0",
+    "version": "1.2.1",
     "description": "Sync and back up SillyTavern chats, group chats, characters, and worlds to WebDAV.",
     "type": "commonjs",
     "main": "server/index.js",

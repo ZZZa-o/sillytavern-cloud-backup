@@ -69,7 +69,7 @@ command -v git >/dev/null 2>&1 || die "未安装 git。
 OLD_ROOT="$ST_ROOT/_webdav-chat-backup-old"
 
 printf '\n%s\n' "SillyTavern 目录：$ST_ROOT"
-printf '%s\n\n' "${C_DIM}正在安装 WebDAV Chat Backup...${C_OFF}"
+printf '%s\n\n' "${C_DIM}正在安装 聊天云同步 (WebDAV Chat Backup)...${C_OFF}"
 
 # ---------------------------------------------------------------------------
 # 克隆或更新
@@ -134,6 +134,6 @@ fi
 printf '\n%s\n' "${C_OK}安装完成。${C_OFF}"
 printf '%s\n' "接下来："
 printf '%s\n' "  1. 重启 SillyTavern"
-printf '%s\n' "  2. 打开「扩展」页面，展开 WebDAV Chat Backup"
+printf '%s\n' "  2. 打开「扩展」页面，展开「聊天云同步」"
 printf '%s\n' "  3. 填写 WebDAV 地址、用户名、授权密码，点「测试连接」"
 printf '\n%s\n\n' "${C_DIM}以后再次运行本脚本即可更新；酒馆启动时也会自动更新服务端插件。${C_OFF}"

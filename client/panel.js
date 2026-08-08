@@ -205,7 +205,7 @@ export function buildPanel() {
         <div id="wdcb-root" class="wdcb-shell">
             <div class="inline-drawer">
                 <div class="inline-drawer-toggle inline-drawer-header">
-                    <b><i class="fa-solid fa-cloud-arrow-up"></i> WebDAV Chat Backup</b>
+                    <b><i class="fa-solid fa-cloud-arrow-up"></i> 聊天云同步</b>
                     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
                 </div>
                 <div class="inline-drawer-content">
