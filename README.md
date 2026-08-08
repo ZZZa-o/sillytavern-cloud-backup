@@ -37,6 +37,44 @@
 
 仓库地址： [https://github.com/ZZZa-o/sillytavern-webdav-chat-backup](https://github.com/ZZZa-o/sillytavern-webdav-chat-backup)
 
+### 方式一：一键安装（推荐，Termux / Linux / macOS）
+
+在装有 SillyTavern 的机器上执行：
+
+```bash
+bash <(curl -sL https://cdn.jsdelivr.net/gh/ZZZa-o/sillytavern-webdav-chat-backup@main/install.sh)
+```
+
+国内访问 GitHub 不畅时上面的 jsDelivr 链接通常更稳；也可以用原始链接：
+
+```bash
+bash <(curl -sL https://raw.githubusercontent.com/ZZZa-o/sillytavern-webdav-chat-backup/main/install.sh)
+```
+
+脚本会自动完成：找到 SillyTavern 目录、安装前端扩展与服务端插件、把 `config.yaml` 里的 `enableServerPlugins` 设为 `true`（改动前会备份）。装好后重启 SillyTavern 即可。
+
+要点：
+
+- Termux 用户先确保装了 git：`pkg install git`
+- 必须用 `bash` 而不是 `sh` 执行。
+- 脚本没找到酒馆目录时，把路径作为参数传进去：`bash install.sh ~/SillyTavern`
+- **再次运行同一条命令就是更新**。
+- 如果之前是手动复制安装的，脚本会把旧目录移到 `_webdav-chat-backup-old/` 再重新安装。旧目录必须挪出 `plugins/`，否则酒馆会把它当成第二个插件加载并报 id 冲突。
+
+### 方式二：两条 git 命令
+
+```bash
+cd ~/SillyTavern
+git clone https://github.com/ZZZa-o/sillytavern-webdav-chat-backup.git plugins/webdav-chat-backup
+git clone https://github.com/ZZZa-o/sillytavern-webdav-chat-backup.git public/scripts/extensions/third-party/webdav-chat-backup
+```
+
+然后在 `config.yaml` 里设置 `enableServerPlugins: true` 并重启。
+
+服务端插件可以直接 clone 整个仓库，是因为仓库根的 `package.json` 里 `main` 指向 `server-plugin/index.js`，SillyTavern 的插件加载器会优先按它解析入口。
+
+### 方式三：手动复制
+
 1. 把本项目整个文件夹复制到：
 
    ```text
@@ -58,6 +96,12 @@
 4. 重启 SillyTavern。
 
 5. 进入 SillyTavern 的“扩展”页面，展开 `WebDAV Chat Backup`。
+
+### 关于自动更新
+
+用方式一或方式二安装时，插件目录本身就是一个 git 仓库。SillyTavern 的 `enableServerPluginsAutoUpdate` 默认为 `true`，会在每次启动时自动拉取服务端插件的更新。不想要这个行为就在 `config.yaml` 里关掉它。
+
+手动复制安装（方式三）不具备自动更新能力。
 
 ## 使用
 

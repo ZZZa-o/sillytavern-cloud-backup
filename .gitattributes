@@ -1,0 +1,12 @@
+# shell 脚本必须始终是 LF。
+# 带 CR 的脚本在 Termux / Linux 上会直接报 bad interpreter，
+# 而 Windows 上 core.autocrlf=true 会在检出时把 LF 转成 CRLF。
+*.sh text eol=lf
+
+# 其余文本文件在仓库内统一存为 LF，检出时交给各平台自行处理。
+*.js   text
+*.json text
+*.css  text
+*.md   text
+*.yaml text
+*.yml  text
