@@ -6,8 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { zipSync, unzipSync, strToU8, strFromU8 } = require('fflate');
 
-const { timestampForFile, ensureInside } = require('./util.js');
-const { SNAPSHOT_DIR } = require('./paths.js');
+const { timestampForFile, ensureInside, SNAPSHOT_DIR } = require('./sync.js');
 const webdav = require('./webdav.js');
 
 const MANIFEST_FILE = 'webdav-chat-backup-manifest.json';

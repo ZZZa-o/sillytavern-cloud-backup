@@ -246,31 +246,23 @@ InfiniCLOUD、NAS、Nextcloud、ownCloud、Cloudreve 等服务只要提供标准
 
 ### 目录结构
 
+前后端各四个文件，各管一摊：
+
 ```text
 manifest.json         前端扩展清单，js/css 指向 client/
 package.json          服务端插件清单，main 指向 server/index.js
 install.sh            一键安装 / 更新脚本
 client/               前端扩展
-├─ index.js           入口：建面板、绑事件、启动定时器
-├─ settings.js        默认值、读写、表单映射
-├─ ui.js              忙碌态、状态栏、格式化、withBusy 包装
-├─ api.js             与服务端通信、密码与连接测试
-├─ panel.js           面板 HTML
-├─ sync.js            多端同步
-├─ snapshot.js        zip 全量快照
-├─ auto.js            自动执行
+├─ index.js           入口：建面板、绑事件
+├─ settings.js        设置读写与表单映射
+├─ panel.js           面板 HTML、状态栏与格式化
+├─ actions.js         全部动作：连接、密码、同步、快照、自动执行
 └─ style.css
 server/               服务端插件
-├─ index.js           入口：路由注册与错误包装
-├─ config.js          请求设置解析、secrets 读取
-├─ webdav.js          WebDAV 通信原语、PROPFIND、目录遍历
-├─ paths.js           远端布局、路径映射与安全化
-├─ scan.js            本地扫描与哈希
-├─ plan.js            三方比较与 .jsonl 快进（纯函数）
-├─ sync.js            同步执行与并发锁
-├─ snapshot.js        zip 打包与恢复
-├─ state.js           本机基线与设备标识
-└─ util.js
+├─ index.js           入口：路由注册与请求配置解析
+├─ webdav.js          WebDAV 通信原语（请求、PROPFIND、目录遍历）
+├─ sync.js            多端同步：路径、扫描、基线、三方比较、执行
+└─ snapshot.js        zip 全量快照与恢复
 tools/
 └─ sync-logic-test.js 同步核心逻辑的单元测试
 ```
@@ -283,7 +275,7 @@ tools/
 node tools/sync-logic-test.js
 ```
 
-`plan.js` 和 `paths.js` 只依赖 Node 内置模块，不碰网络也不碰磁盘，所以测试不需要 SillyTavern 的 `node_modules`。覆盖三方比较的全部分支、快进判定、墓碑、方向限制和路径安全化。
+`server/sync.js` 只依赖 Node 内置模块（fflate 只在 `snapshot.js` 里用），所以测试不需要 SillyTavern 的 `node_modules`。覆盖三方比较的全部分支、快进判定、墓碑、方向限制和路径安全化。
 
 ## 常见问题
 

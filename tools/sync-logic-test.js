@@ -3,15 +3,16 @@
  *
  *   node tools/sync-logic-test.js
  *
- * plan.js 与 paths.js 都是纯逻辑、不依赖 fflate，
+ * server/sync.js 只依赖 Node 内置模块（fflate 只在 snapshot.js 里用），
  * 所以这里不需要指向 SillyTavern 的 node_modules。
  */
 const assert = require('node:assert');
 const path = require('node:path');
 
-const serverDir = path.join(__dirname, '..', 'server');
-const { analyzeJsonl, buildPlan, pruneTombstones } = require(path.join(serverDir, 'plan.js'));
-const { safeSegment, safeRelPath, pathAllowed, conflictPathFor } = require(path.join(serverDir, 'paths.js'));
+const {
+    analyzeJsonl, buildPlan, pruneTombstones,
+    safeSegment, safeRelPath, pathAllowed, conflictPathFor,
+} = require(path.join(__dirname, '..', 'server', 'sync.js'));
 
 let passed = 0;
 let failed = 0;

@@ -1,24 +1,21 @@
 /**
- * SillyTavern 前端扩展入口。
- * 只负责建面板、绑事件、启动定时器，具体实现在同目录的各模块：
+ * SillyTavern 前端扩展入口。四个文件各管一摊：
  *
- *   settings.js  默认值、读写、表单映射
- *   ui.js        忙碌态、状态栏、格式化、withBusy 包装
- *   api.js       与服务端插件通信、密码与连接测试
- *   panel.js     面板 HTML
- *   sync.js      多端同步
- *   snapshot.js  zip 全量快照
- *   auto.js      自动执行
+ *   index.js     入口：建面板、绑事件（本文件）
+ *   settings.js  设置读写与表单映射
+ *   panel.js     面板 HTML、状态栏与格式化
+ *   actions.js   全部动作：连接、密码、同步、快照、自动执行
  */
 import { eventSource, event_types } from '/script.js';
 
 import { readFormIntoSettings } from './settings.js';
-import { setStatus } from './ui.js';
-import { checkHelper, savePassword, clearPassword, testConnection } from './api.js';
-import { buildPanel } from './panel.js';
-import { previewSync, runSync } from './sync.js';
-import { createSnapshot, refreshList, restoreSnapshot, deleteSnapshot, renderSelectedMeta } from './snapshot.js';
-import * as auto from './auto.js';
+import { buildPanel, setStatus } from './panel.js';
+import {
+    checkHelper, savePassword, clearPassword, testConnection,
+    previewSync, runSync,
+    createSnapshot, refreshList, restoreSnapshot, deleteSnapshot, renderSelectedMeta,
+    autoMaybeRun, autoQueue, autoSyncTimer,
+} from './actions.js';
 
 const FORM_INPUTS = [
     '#wdcb-root input[type="checkbox"]',
@@ -48,12 +45,12 @@ function bindEvents() {
 
     on('wdcb-save-config', () => {
         readFormIntoSettings();
-        auto.syncTimer();
+        autoSyncTimer();
         setStatus('配置已保存。', 'ok');
     });
     on('wdcb-save-password', savePassword);
     on('wdcb-clear-password', clearPassword);
-    on('wdcb-test', () => testConnection(() => refreshList(false)));
+    on('wdcb-test', testConnection);
     on('wdcb-sync-preview', previewSync);
     on('wdcb-sync-now', () => runSync('manual'));
     on('wdcb-backup-now', () => createSnapshot('manual'));
@@ -66,20 +63,20 @@ function bindEvents() {
     // 定时器只在表单变动时重建：间隔和开关都来自这里
     $(FORM_INPUTS).on('change', () => {
         readFormIntoSettings();
-        auto.syncTimer();
+        autoSyncTimer();
     });
 
     for (const name of CHAT_EVENTS) {
         const event = event_types[name];
-        if (event) eventSource.on(event, () => auto.queue('auto-chat'));
+        if (event) eventSource.on(event, () => autoQueue('auto-chat'));
     }
 
-    window.addEventListener('pagehide', () => auto.maybeRun('auto-pagehide'));
+    window.addEventListener('pagehide', () => autoMaybeRun('auto-pagehide'));
 }
 
 jQuery(async () => {
     buildPanel();
     bindEvents();
-    auto.syncTimer();
+    autoSyncTimer();
     await checkHelper();
 });
