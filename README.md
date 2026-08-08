@@ -37,28 +37,53 @@
 
 仓库地址： [https://github.com/ZZZa-o/sillytavern-webdav-chat-backup](https://github.com/ZZZa-o/sillytavern-webdav-chat-backup)
 
-### 方式一：一键安装（推荐，Termux / Linux / macOS）
+### 方式一：一键安装（推荐）
 
-在装有 SillyTavern 的机器上执行：
+#### 安卓用户（Termux）
+
+1. 先装好 git 和 curl：
+
+   ```bash
+   pkg install git curl
+   ```
+
+2. 再运行安装脚本：
+
+   ```bash
+   bash <(curl -sL https://cdn.jsdelivr.net/gh/ZZZa-o/sillytavern-webdav-chat-backup@main/install.sh)
+   ```
+
+#### Linux / macOS 用户
+
+只需要运行一条命令：
 
 ```bash
 bash <(curl -sL https://cdn.jsdelivr.net/gh/ZZZa-o/sillytavern-webdav-chat-backup@main/install.sh)
 ```
 
-国内访问 GitHub 不畅时上面的 jsDelivr 链接通常更稳；也可以用原始链接：
+提示找不到 git 的话，先按系统装一下：Debian/Ubuntu 用 `sudo apt install git`，macOS 用 `brew install git`。
 
-```bash
-bash <(curl -sL https://raw.githubusercontent.com/ZZZa-o/sillytavern-webdav-chat-backup/main/install.sh)
-```
+#### Windows 用户
 
-脚本会自动完成：找到 SillyTavern 目录、安装前端扩展与服务端插件、把 `config.yaml` 里的 `enableServerPlugins` 设为 `true`（改动前会备份）。装好后重启 SillyTavern 即可。
+Windows 没有自带 bash。装了 Git for Windows 之后，在酒馆目录里右键选「Git Bash Here」，然后运行上面那条同样的命令。不想装 Git Bash 就用下面的方式二或方式三。
 
-要点：
+#### 通用说明
 
-- Termux 用户先确保装了 git：`pkg install git`
-- 必须用 `bash` 而不是 `sh` 执行。
-- 脚本没找到酒馆目录时，把路径作为参数传进去：`bash install.sh ~/SillyTavern`
-- **再次运行同一条命令就是更新**。
+- 上面用的是 jsDelivr 链接，国内访问通常更稳。也可以换成原始链接：
+
+  ```bash
+  bash <(curl -sL https://raw.githubusercontent.com/ZZZa-o/sillytavern-webdav-chat-backup/main/install.sh)
+  ```
+
+- 必须用 `bash` 执行，不能用 `sh`。
+- 脚本会自动找到 SillyTavern 目录。找不到时把路径作为参数传进去：
+
+  ```bash
+  bash install.sh ~/SillyTavern
+  ```
+
+- 脚本做三件事：安装前端扩展、安装服务端插件、把 `config.yaml` 里的 `enableServerPlugins` 设为 `true`（改动前会备份原文件）。装完重启酒馆即可。
+- **以后再次运行同一条命令就是更新。**
 - 如果之前是手动复制安装的，脚本会把旧目录移到 `_webdav-chat-backup-old/` 再重新安装。旧目录必须挪出 `plugins/`，否则酒馆会把它当成第二个插件加载并报 id 冲突。
 
 ### 方式二：两条 git 命令

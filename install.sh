@@ -59,7 +59,10 @@ if [ -z "$ST_ROOT" ]; then
        bash install.sh ~/SillyTavern"
 fi
 
-command -v git >/dev/null 2>&1 || die "未安装 git。Termux 用户先执行：pkg install git"
+command -v git >/dev/null 2>&1 || die "未安装 git。
+       安卓 Termux：pkg install git curl
+       Debian/Ubuntu：sudo apt install git
+       macOS：brew install git"
 
 # 迁移旧版手动安装时，备份放在这里。必须位于 plugins/ 与 third-party/ 之外，
 # 否则酒馆会把备份目录也当成插件/扩展加载。
