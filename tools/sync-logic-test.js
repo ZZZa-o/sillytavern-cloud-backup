@@ -1,13 +1,17 @@
 /**
  * 同步核心逻辑的单元测试。
- * 用法：node tools/sync-logic-test.js
+ *
+ *   node tools/sync-logic-test.js
+ *
+ * plan.js 与 paths.js 都是纯逻辑、不依赖 fflate，
+ * 所以这里不需要指向 SillyTavern 的 node_modules。
  */
 const assert = require('node:assert');
 const path = require('node:path');
 
-const modulePath = path.join(__dirname, '..', 'server-plugin', 'index.js');
-const { __test } = require(modulePath);
-const { analyzeJsonl, buildPlan, safeSegment, safeRelPath, pathAllowed, conflictPathFor, pruneTombstones } = __test;
+const serverDir = path.join(__dirname, '..', 'server');
+const { analyzeJsonl, buildPlan, pruneTombstones } = require(path.join(serverDir, 'plan.js'));
+const { safeSegment, safeRelPath, pathAllowed, conflictPathFor } = require(path.join(serverDir, 'paths.js'));
 
 let passed = 0;
 let failed = 0;
