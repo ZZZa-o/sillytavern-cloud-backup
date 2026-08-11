@@ -112,7 +112,12 @@ async function ensureRoot(config) {
     }
 }
 
-/** 在 remotePath 下按需创建多级子目录。created 用于单次同步内去重。 */
+/**
+ * 在 remotePath 下按需创建多级子目录。created 用于单次备份内去重。
+ *
+ * 405 是"已存在"（坚果云对已存在的目录直接回 201，也一并接受）。
+ * 409 故意不在成功之列 —— 它表示父集合不存在，把它当成功只会让后续 PUT 莫名其妙地失败。
+ */
 async function ensureDir(config, segments, created) {
     const base = splitRemotePath(config.remotePath);
     for (let index = 1; index <= segments.length; index++) {
@@ -122,7 +127,7 @@ async function ensureDir(config, segments, created) {
         await webDavRequest(config, [...base, ...slice], {
             method: 'MKCOL',
             includeRemotePath: false,
-        }, [200, 201, 204, 405, 409]);
+        }, [200, 201, 204, 405]);
         created.add(key);
     }
 }

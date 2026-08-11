@@ -64,8 +64,8 @@ command -v git >/dev/null 2>&1 || die "未安装 git。
        Debian/Ubuntu：sudo apt install git
        macOS：brew install git"
 
-# 迁移旧版手动安装时，备份放在这里。必须位于 plugins/ 与 third-party/ 之外，
-# 否则酒馆会把备份目录也当成插件/扩展加载。
+# 目录已存在但不是 git 仓库时（比如之前手动复制安装的），旧目录挪到这里。
+# 必须位于 plugins/ 与 third-party/ 之外，否则酒馆会把它也当成插件/扩展加载。
 OLD_ROOT="$ST_ROOT/_webdav-chat-backup-old"
 
 printf '\n%s\n' "SillyTavern 目录：$ST_ROOT"
@@ -103,7 +103,7 @@ clone_or_update() {
     ok "$label 安装完成"
 }
 
-# 服务端插件：加载器会读仓库根的 package.json（main 指向 server-plugin/index.js）
+# 服务端插件：加载器会读仓库根的 package.json（main 指向 server/index.js）
 clone_or_update "$ST_ROOT/plugins/$PLUGIN_ID" "服务端插件"
 
 # 前端扩展
@@ -133,7 +133,8 @@ fi
 
 printf '\n%s\n' "${C_OK}安装完成。${C_OFF}"
 printf '%s\n' "接下来："
-printf '%s\n' "  1. 重启 SillyTavern"
-printf '%s\n' "  2. 打开「扩展」页面，展开 WebDAV Chat Backup"
-printf '%s\n' "  3. 填写 WebDAV 地址、用户名、授权密码，点「测试连接」"
+printf '%s\n' "  1. 重启 SillyTavern（服务端插件只在启动时加载一次，不重启就会显示「后端未加载」）"
+printf '%s\n' "  2. 打开「扩展」页面，展开「聊天云备份」"
+printf '%s\n' "  3. 填写 WebDAV 地址、用户名、授权密码，点「保存配置」再点「测试连接」"
+printf '%s\n' "  4. 点「范围」挑要备份的角色卡与世界书，然后点「上传到云端」"
 printf '\n%s\n\n' "${C_DIM}以后再次运行本脚本即可更新；酒馆启动时也会自动更新服务端插件。${C_OFF}"

@@ -1,78 +1,27 @@
 /**
- * SillyTavern 服务端插件入口。四个文件各管一摊：
+ * SillyTavern 服务端插件入口。各文件分工：
  *
- *   index.js     路由注册与请求配置解析（本文件）
- *   webdav.js    WebDAV 通信原语（请求、PROPFIND、目录遍历）
- *   sync.js      多端同步（决策部分为纯函数，单元测试直接引它）
- *   snapshot.js  zip 全量快照与恢复
+ *   index.js   路由注册（本文件）
+ *   config.js  插件自管配置（含密码）
+ *   paths.js   本地路径 ↔ 远端路径映射，以及备份范围判定
+ *   backup.js  上传 / 下载 / 预览
+ *   cloud.js   云端文件管理：列举、指定下载、指定删除
+ *   webdav.js  WebDAV 通信原语
+ *
+ * 连接信息与范围都从插件自己的 config.json 读，前端不再随请求携带地址与密码；
+ * 唯一随请求带上的是「avatar 文件名 → 角色名」映射 —— 只有酒馆前端知道 png 里的角色叫什么。
  */
-const fs = require('node:fs');
-const path = require('node:path');
-
+const configStore = require('./config.js');
+const paths = require('./paths.js');
 const webdav = require('./webdav.js');
-const sync = require('./sync.js');
-const snapshot = require('./snapshot.js');
+const backup = require('./backup.js');
+const cloud = require('./cloud.js');
 
 const info = {
     id: 'webdav-chat-backup',
     name: 'WebDAV Chat Backup',
-    description: 'Sync and back up SillyTavern chats, group chats, characters, and worlds to WebDAV.',
+    description: 'Back up SillyTavern characters, chats, worlds, and settings to WebDAV.',
 };
-
-const SECRET_KEY = 'webdav_chat_backup_password';
-const DIRECTIONS = ['two-way', 'upload-only', 'download-only'];
-
-function readWebDavPassword(directories) {
-    const file = path.join(directories.root, 'secrets.json');
-    if (!fs.existsSync(file)) return '';
-    try {
-        const secrets = JSON.parse(fs.readFileSync(file, 'utf8'));
-        const values = secrets[SECRET_KEY];
-        if (!Array.isArray(values) || values.length === 0) return '';
-        const active = values.find(item => item && item.active) || values.at(-1);
-        return typeof active?.value === 'string' ? active.value : '';
-    } catch {
-        return '';
-    }
-}
-
-/** 把请求体里的设置整理成后端各模块统一使用的 config。 */
-function resolveConfig(request) {
-    const body = request.body?.settings || {};
-    const url = String(body.url || '').trim();
-    if (!url) {
-        throw new Error('请先填写 WebDAV 地址。');
-    }
-    try {
-        const parsed = new URL(url);
-        if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error();
-    } catch {
-        throw new Error('WebDAV 地址格式不正确。');
-    }
-
-    const raw = body.include || {};
-    const include = {
-        chats: raw.chats !== false,
-        groupChats: raw.groupChats !== false,
-        characters: raw.characters !== false,
-        worlds: raw.worlds !== false,
-        settings: raw.settings !== false,
-    };
-    if (!Object.values(include).some(Boolean)) {
-        throw new Error('请至少选择一项备份内容。');
-    }
-
-    return {
-        url,
-        username: String(body.username || '').trim(),
-        password: readWebDavPassword(request.user.directories),
-        remotePath: String(body.remotePath || '').trim(),
-        include,
-        direction: DIRECTIONS.includes(body.direction) ? body.direction : 'two-way',
-        deviceName: String(body.deviceName || '').trim().slice(0, 40),
-        retention: Math.max(1, Math.min(200, Number.parseInt(body.retention, 10) || 10)),
-    };
-}
 
 async function handle(response, fn) {
     try {
@@ -83,21 +32,63 @@ async function handle(response, fn) {
     }
 }
 
+/** 角色名映射；前端没带就退化成用 avatar 文件名当角色名，功能不受影响只是网盘里不好认。 */
+function readNames(request) {
+    const raw = request.body?.characterNames;
+    return paths.buildNameIndex(raw && typeof raw === 'object' ? raw : {});
+}
+
+/**
+ * 把「已内嵌在角色卡里的世界书」注入范围。
+ * 这份名单只有前端算得出来（要读 png 里的 character_book），所以随请求带上，不进配置文件。
+ */
+function scopeFor(config, request) {
+    const raw = request.body?.embeddedWorlds;
+    const exclude = Array.isArray(raw) ? raw.map(String) : [];
+    return { ...config.scope, worlds: { ...config.scope.worlds, exclude } };
+}
+
+/** 连接信息用配置里的，范围用注入过排除名单的。 */
+function configFor(request) {
+    const config = configStore.resolveConfig(request.user.directories);
+    return { ...config, scope: scopeFor(config, request) };
+}
+
+/** 云端文件管理的请求体统一是一组远端路径。 */
+function readPaths(request) {
+    const list = request.body?.paths;
+    if (!Array.isArray(list) || list.length === 0) {
+        throw new Error('请先选择要操作的云端文件。');
+    }
+    return list;
+}
+
 function init(router) {
-    router.post('/status', (request, response) => {
-        const state = sync.readState(request.user.directories);
-        response.json({
-            ok: true,
+    // ---- 状态与配置 ----
+
+    router.post('/status', (request, response) => handle(response, async () => {
+        const config = configStore.readConfig(request.user.directories);
+        const state = backup.readState(request.user.directories);
+        return {
             helper: true,
-            hasPassword: !!readWebDavPassword(request.user.directories),
-            device: state.device,
-            lastSyncAt: state.lastSyncAt,
-            trackedFiles: Object.keys(state.base).length,
-        });
-    });
+            hasPassword: !!config.password,
+            configured: !!config.url,
+            lastBackupAt: state.lastBackupAt || config.lastBackupAt || '',
+        };
+    }));
+
+    router.post('/config/load', (request, response) => handle(response, async () => {
+        const config = configStore.readConfig(request.user.directories);
+        return { config: configStore.publicConfig(config) };
+    }));
+
+    router.post('/config/save', (request, response) => handle(response, async () => {
+        const saved = configStore.writeConfig(request.user.directories, request.body?.config || {});
+        return { config: configStore.publicConfig(saved), scopeText: paths.describeScope(saved.scope) };
+    }));
 
     router.post('/test', (request, response) => handle(response, async () => {
-        const config = resolveConfig(request);
+        const config = configStore.resolveConfig(request.user.directories);
         await webdav.ensureRoot(config);
         const marker = `.webdav-chat-backup-test-${Date.now()}.txt`;
         const body = Buffer.from(`SillyTavern WebDAV test ${new Date().toISOString()}\n`, 'utf8');
@@ -110,44 +101,43 @@ function init(router) {
         return { message: '连接可用，远端目录可读写。' };
     }));
 
-    // ---- 多端增量同步 ----
+    // ---- 备份 ----
 
-    router.post('/sync/plan', (request, response) => handle(response, async () => {
-        const config = resolveConfig(request);
-        const context = await sync.collectContext(request.user, config);
+    router.post('/backup/plan', (request, response) => handle(response, async () => {
+        const config = configFor(request);
         return {
-            plan: sync.summarizePlan(sync.buildPlan(context, config.direction)),
-            device: context.device,
+            plan: await backup.planOnly(request.user, config, readNames(request)),
+            scopeText: paths.describeScope(config.scope),
         };
     }));
 
-    router.post('/sync/apply', (request, response) => handle(response, async () => {
-        return await sync.runSync(request.user, resolveConfig(request));
+    router.post('/backup/upload', (request, response) => handle(response, async () => {
+        const result = await backup.runUpload(request.user, configFor(request), readNames(request));
+        configStore.touchLastBackup(request.user.directories, result.lastBackupAt);
+        return result;
     }));
 
-    // ---- zip 全量快照 ----
-
-    router.post('/list', (request, response) => handle(response, async () => {
-        return { items: await snapshot.list(resolveConfig(request)) };
+    router.post('/backup/download', (request, response) => handle(response, async () => {
+        const result = await backup.runDownload(request.user, configFor(request), readNames(request));
+        configStore.touchLastBackup(request.user.directories, result.lastBackupAt);
+        return result;
     }));
 
-    router.post('/backup', (request, response) => handle(response, async () => {
-        const config = resolveConfig(request);
-        return await snapshot.upload(config, request.user, config.include, request.body?.reason);
+    // ---- 云端文件管理 ----
+
+    router.post('/cloud/list', (request, response) => handle(response, async () => {
+        const config = configStore.resolveConfig(request.user.directories);
+        return { items: await cloud.list(config, readNames(request)) };
     }));
 
-    router.post('/restore', (request, response) => handle(response, async () => {
-        const config = resolveConfig(request);
-        const fileName = snapshot.sanitizeFileName(request.body?.fileName);
-        const buffer = await snapshot.fetchArchive(config, fileName);
-        return await snapshot.restore(request.user.directories, buffer, config.include);
+    router.post('/cloud/download', (request, response) => handle(response, async () => {
+        const config = configStore.resolveConfig(request.user.directories);
+        return await cloud.download(request.user, config, readNames(request), readPaths(request));
     }));
 
-    router.post('/delete', (request, response) => handle(response, async () => {
-        const config = resolveConfig(request);
-        const fileName = snapshot.sanitizeFileName(request.body?.fileName);
-        await snapshot.remove(config, fileName);
-        return { deleted: fileName };
+    router.post('/cloud/delete', (request, response) => handle(response, async () => {
+        const config = configStore.resolveConfig(request.user.directories);
+        return await cloud.remove(request.user, config, readNames(request), readPaths(request));
     }));
 }
 

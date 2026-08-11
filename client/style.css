@@ -1,10 +1,14 @@
-.wdcb-shell {
+.wdcb-shell,
+.wdcb-scope-popup {
     --wdcb-border: color-mix(in srgb, var(--SmartThemeBodyColor) 18%, transparent);
     --wdcb-muted: color-mix(in srgb, var(--SmartThemeBodyColor) 62%, transparent);
     --wdcb-surface: color-mix(in srgb, var(--SmartThemeBlurTintColor) 78%, transparent);
     --wdcb-accent: #2f9e8f;
     --wdcb-warn: #b9842f;
     --wdcb-danger: #bd4b5a;
+}
+
+.wdcb-shell {
     margin-top: 2px;
     font-size: 13px;
     line-height: 1.15;
@@ -93,7 +97,7 @@
 .wdcb-field select,
 .wdcb-inline-field input,
 .wdcb-inline-field select,
-.wdcb-restore-row select {
+.wdcb-cloud-search {
     width: 100%;
     min-width: 0;
     box-sizing: border-box;
@@ -105,10 +109,8 @@
     line-height: 1.1 !important;
 }
 
-.wdcb-checks,
 .wdcb-auto-row,
-.wdcb-actions,
-.wdcb-restore-row {
+.wdcb-actions {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
@@ -134,7 +136,8 @@
     margin: 0 3px 0 0;
 }
 
-.wdcb-shell .menu_button {
+.wdcb-shell .menu_button,
+.wdcb-scope-popup .menu_button {
     display: inline-flex !important;
     flex: 0 0 auto;
     flex-direction: row !important;
@@ -154,7 +157,8 @@
     font-size: 12px;
 }
 
-.wdcb-shell .menu_button i {
+.wdcb-shell .menu_button i,
+.wdcb-scope-popup .menu_button i {
     display: inline-flex !important;
     align-items: center;
     justify-content: center;
@@ -165,12 +169,20 @@
     line-height: 1;
 }
 
-.wdcb-shell .menu_button span {
+.wdcb-shell .menu_button span,
+.wdcb-scope-popup .menu_button span {
     display: inline-block;
     line-height: 1;
     white-space: nowrap;
     word-break: keep-all;
     writing-mode: horizontal-tb;
+}
+
+/* 上面那条 display:inline-flex 带 !important，会盖过 [hidden] 自带的 display:none，
+   所以要显式再压回去 —— 否则「仅当前角色」会跑到世界书菜单里去 */
+.wdcb-shell .menu_button[hidden],
+.wdcb-scope-popup .menu_button[hidden] {
+    display: none !important;
 }
 
 .wdcb-shell .menu_button.primary {
@@ -179,17 +191,6 @@
 
 .wdcb-shell .menu_button.danger {
     border-color: color-mix(in srgb, var(--wdcb-danger) 55%, var(--wdcb-border));
-}
-
-.wdcb-restore-row {
-    flex: 1 1 420px;
-    align-items: stretch;
-}
-
-.wdcb-restore-row select {
-    flex: 1 1 280px;
-    min-height: 22px !important;
-    height: 22px !important;
 }
 
 .wdcb-meta {
@@ -218,18 +219,13 @@
     text-align: center;
 }
 
-.wdcb-inline-field select {
-    width: auto;
-    min-width: 92px;
-}
-
-.wdcb-sync-report {
+.wdcb-report {
     flex: 1 1 100%;
     min-width: 0;
     margin-top: 2px;
 }
 
-.wdcb-sync-report:empty {
+.wdcb-report:empty {
     display: none;
 }
 
@@ -316,13 +312,213 @@
     color: color-mix(in srgb, var(--wdcb-danger) 78%, var(--SmartThemeBodyColor));
 }
 
+/* --- 云端文件管理 ------------------------------------------------------- */
+
+.wdcb-cloud-search {
+    flex: 1 1 100%;
+    margin-top: 2px;
+}
+
+.wdcb-cloud-list {
+    flex: 1 1 100%;
+    min-width: 0;
+    max-height: 260px;
+    margin-top: 3px;
+    overflow-y: auto;
+}
+
+.wdcb-cloud-empty {
+    padding: 4px 2px;
+    font-size: 11.5px;
+    color: var(--wdcb-muted);
+}
+
+.wdcb-cloud-group {
+    margin-bottom: 3px;
+    border: 1px solid var(--wdcb-border);
+    border-radius: 5px;
+    background: var(--wdcb-surface);
+}
+
+.wdcb-cloud-group > summary {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 6px;
+    cursor: pointer;
+    font-size: 11.5px;
+    color: var(--wdcb-muted);
+}
+
+.wdcb-cloud-group[open] > summary {
+    border-bottom: 1px solid var(--wdcb-border);
+}
+
+.wdcb-cloud-rows {
+    padding: 2px 6px 4px;
+}
+
+.wdcb-cloud-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-height: 20px;
+    padding: 1px 0;
+    cursor: pointer;
+    font-size: 11.5px;
+    line-height: 1.2;
+}
+
+.wdcb-cloud-item input[type="checkbox"],
+.wdcb-cloud-group-check {
+    flex: 0 0 auto;
+    width: 14px;
+    height: 14px;
+    margin: 0;
+}
+
+.wdcb-cloud-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.wdcb-cloud-item small {
+    flex: 0 0 auto;
+    color: var(--wdcb-muted);
+    font-size: 10.5px;
+    white-space: nowrap;
+}
+
+/* --- 备份范围弹窗 ------------------------------------------------------- */
+
+.wdcb-scope-popup {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: min(420px, 80vw);
+    text-align: left;
+    font-size: 13px;
+}
+
+.wdcb-scope-buttons {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 6px;
+}
+
+.wdcb-scope-popup .wdcb-scope-btn {
+    width: 100% !important;
+    min-height: 34px !important;
+    height: auto !important;
+    padding: 6px 8px !important;
+    border: 1px solid var(--wdcb-border);
+    font-size: 13px;
+}
+
+/* 已选中的类别：边框加粗高亮，一眼能看出这次备份包含什么 */
+.wdcb-scope-popup .wdcb-scope-btn.is-selected {
+    border-width: 2px;
+    border-color: var(--wdcb-accent);
+    color: color-mix(in srgb, var(--wdcb-accent) 80%, var(--SmartThemeBodyColor));
+    font-weight: 700;
+}
+
+.wdcb-scope-note {
+    padding: 5px 7px;
+    border: 1px solid var(--wdcb-border);
+    border-radius: 5px;
+    background: var(--wdcb-surface);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+}
+
+.wdcb-scope-hint {
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--wdcb-muted);
+}
+
+.wdcb-scope-head {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex-wrap: wrap;
+}
+
+.wdcb-scope-search {
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 26px !important;
+    height: 26px !important;
+    font-size: 12.5px;
+}
+
+.wdcb-scope-list {
+    max-height: min(46vh, 340px);
+    padding: 3px 4px;
+    border: 1px solid var(--wdcb-border);
+    border-radius: 5px;
+    background: var(--wdcb-surface);
+    overflow-y: auto;
+}
+
+.wdcb-scope-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 24px;
+    padding: 2px 3px;
+    cursor: pointer;
+    line-height: 1.2;
+}
+
+.wdcb-scope-item:hover {
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 8%, transparent);
+    border-radius: 4px;
+}
+
+.wdcb-scope-item input[type="checkbox"] {
+    flex: 0 0 auto;
+    width: 15px;
+    height: 15px;
+    margin: 0;
+}
+
+.wdcb-scope-item span {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.wdcb-scope-tag {
+    flex: 0 0 auto;
+    padding: 0 5px;
+    border: 1px solid color-mix(in srgb, var(--wdcb-accent) 55%, transparent);
+    border-radius: 999px;
+    color: color-mix(in srgb, var(--wdcb-accent) 82%, var(--SmartThemeBodyColor));
+    font-size: 10.5px;
+}
+
+/* 有引用但角色卡里没内嵌副本的世界书：必须自己勾，用告警色提醒 */
+.wdcb-scope-tag.is-warn {
+    border-color: color-mix(in srgb, var(--wdcb-warn) 60%, transparent);
+    color: color-mix(in srgb, var(--wdcb-warn) 85%, var(--SmartThemeBodyColor));
+}
+
+.wdcb-scope-empty,
+.wdcb-scope-count {
+    padding: 4px 3px;
+    font-size: 11.5px;
+    color: var(--wdcb-muted);
+}
+
 @media (max-width: 720px) {
     .wdcb-grid {
         grid-template-columns: 1fr;
     }
 
-    .wdcb-restore-row select,
-    .wdcb-restore-row button {
-        flex: 1 1 100%;
+    .wdcb-scope-buttons {
+        grid-template-columns: 1fr;
     }
 }
