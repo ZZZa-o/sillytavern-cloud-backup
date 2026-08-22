@@ -16,6 +16,8 @@ const GROUPS = {
     [paths.REMOTE_CHARACTERS]: '角色卡',
     [paths.REMOTE_CHATS]: '聊天记录',
     [paths.REMOTE_WORLDS]: '世界书',
+    [paths.REMOTE_PRESETS]: '预设',
+    [paths.REMOTE_THEMES]: '美化',
     [paths.REMOTE_SETTINGS]: '设置',
 };
 
@@ -76,8 +78,9 @@ async function download(user, config, names, remotePaths) {
         errors: [],
         written: [],
         fallbackDir: '',
-        // 与 backup.js 同义：下载动了哪几类，前端据此热刷新对应列表
-        touched: { characters: 0, chats: 0, worlds: 0, settings: 0, other: 0 },
+        // 与 backup.js 同义：下载动了哪几类、动过哪些顶层目录
+        touched: { characters: 0, chats: 0, worlds: 0, presets: 0, themes: 0, settings: 0, other: 0 },
+        touchedDirs: [],
     };
 
     for (const raw of remotePaths) {
@@ -90,7 +93,7 @@ async function download(user, config, names, remotePaths) {
             if (localRel && paths.localAbsPath(directories, localRel)) {
                 await backup.writeLocal(directories, localRel, buffer);
                 result.written.push({ remote: remoteRel, target: localRel });
-                result.touched[paths.categoryOf(localRel)]++;
+                backup.noteTouched(result, localRel);
             } else {
                 const target = path.join(fallbackRoot, ...remoteRel.split('/'));
                 await fs.promises.mkdir(path.dirname(target), { recursive: true });

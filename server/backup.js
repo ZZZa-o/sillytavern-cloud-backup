@@ -14,6 +14,7 @@ const crypto = require('node:crypto');
 
 const webdav = require('./webdav.js');
 const paths = require('./paths.js');
+const builtin = require('./builtin.js');
 
 // ---------------------------------------------------------------------------
 // 通用小工具
@@ -96,7 +97,7 @@ function statMtime(absPath) {
 // 本机状态：只是哈希缓存 + 设备标识，丢了也不影响正确性
 // ---------------------------------------------------------------------------
 
-const STATE_DIR = '.webdav-chat-backup';
+const STATE_DIR = '.sillytavern-cloud-backup';
 const STATE_FILE = 'scan-cache.json';
 
 function stateFilePath(directories) {
@@ -221,7 +222,7 @@ async function releaseLock(config, device) {
         if (existing?.device && existing.device !== device) return;
         await webdav.remove(config, [META_DIR, LOCK_NAME]);
     } catch (error) {
-        console.warn('[WebDAV Chat Backup] 释放锁失败：', error.message);
+        console.warn('[SillyTavern Cloud Backup] 释放锁失败：', error.message);
     }
 }
 
@@ -297,8 +298,18 @@ function newResult() {
         skipped: 0,
         errors: [],
         // 下载动了哪几类，前端据此热刷新对应列表，免得让用户整页重载
-        touched: { characters: 0, chats: 0, worlds: 0, settings: 0, other: 0 },
+        touched: { characters: 0, chats: 0, worlds: 0, presets: 0, themes: 0, settings: 0, other: 0 },
+        // 动过的顶层目录名。热刷新的粒度有时细于类别 ——
+        // 比如「美化」里 backgrounds 要单独调一次背景列表接口，QuickReplies 则根本没有热加载入口。
+        touchedDirs: [],
     };
+}
+
+/** 记一笔某个本地路径被写入了，供前端决定刷哪个列表。 */
+function noteTouched(result, localRel) {
+    result.touched[paths.categoryOf(localRel)]++;
+    const top = String(localRel).split('/')[0];
+    if (top && !result.touchedDirs.includes(top)) result.touchedDirs.push(top);
 }
 
 /** 上传：范围内本地文件推到远端。云端多余的文件一概不动。 */
@@ -366,7 +377,7 @@ async function runDownload(user, config, names) {
             const absPath = await writeLocal(directories, item.path, buffer);
             cache[item.path] = { hash: sha256(buffer), size: buffer.length, mtime: statMtime(absPath) };
             result.downloaded++;
-            result.touched[paths.categoryOf(item.path)]++;
+            noteTouched(result, item.path);
         } catch (error) {
             result.errors.push({ path: item.path, action: 'download', error: error.message });
         }
@@ -401,12 +412,87 @@ async function planOnly(user, config, names) {
     return summarizePlan(buildPlan(await collectContext(user, config, names)));
 }
 
+// ---------------------------------------------------------------------------
+// 目录清单：范围弹窗要按目录列出具体文件，好让用户勾到单个预设、单个主题
+// ---------------------------------------------------------------------------
+
+/** 递归列出目录下的文件，返回 { rel, bytes }；rel 是目录内的 POSIX 相对路径。 */
+function listDirFiles(dir) {
+    const out = [];
+    if (!dir || !fs.existsSync(dir)) return out;
+
+    const walk = (current, prefix) => {
+        let dirents;
+        try {
+            dirents = fs.readdirSync(current, { withFileTypes: true });
+        } catch {
+            return;
+        }
+        for (const dirent of dirents) {
+            if (dirent.name.startsWith('.')) continue;
+            const full = path.join(current, dirent.name);
+            const rel = prefix ? `${prefix}/${dirent.name}` : dirent.name;
+            if (dirent.isDirectory()) {
+                walk(full, rel);
+            } else if (dirent.isFile()) {
+                try {
+                    out.push({ rel, bytes: fs.statSync(full).size });
+                } catch {
+                    // 扫描期间文件被删掉了，跳过就好
+                }
+            }
+        }
+    };
+
+    walk(dir, '');
+    return out;
+}
+
+/** 主题与预设都是 json，列表里带着扩展名只是噪音。背景图不出明细，不受影响。 */
+function prettyName(rel) {
+    return rel.replace(/\.json$/i, '');
+}
+
+/**
+ * 预设与美化两组各自的目录清单。
+ *
+ * detail 为真的目录带上 entries（具体文件），弹窗展开就能逐个勾；
+ * 背景图只给总数与体积，且**已扣掉酒馆自带的那些** —— excluded 是扣掉的张数，
+ * 界面上要交代清楚，否则用户会以为插件把他的图弄丢了。
+ */
+function scopeDirStats(directories) {
+    const of = group => paths.rootsOfGroup(group).map(root => {
+        const excludeSet = root.dirKey === 'backgrounds' ? builtin.builtinBackgrounds() : null;
+        const all = listDirFiles(directories[root.dirKey]);
+        const own = excludeSet ? all.filter(item => !excludeSet.has(item.rel)) : all;
+
+        const stats = {
+            key: root.dirKey,
+            label: root.label,
+            detail: root.detail === true,
+            files: own.length,
+            bytes: own.reduce((sum, item) => sum + item.bytes, 0),
+        };
+        if (stats.detail) {
+            stats.entries = own
+                .map(item => ({ value: item.rel, label: prettyName(item.rel), bytes: item.bytes }))
+                .sort((a, b) => a.label.localeCompare(b.label, 'zh-Hans-CN'));
+        } else if (excludeSet) {
+            stats.excluded = all.length - own.length;
+        }
+        return stats;
+    });
+    return { presets: of('presets'), themes: of('themes') };
+}
+
 module.exports = {
     META_DIR,
     INDEX_NAME,
     NON_BACKUP_DIRS,
     sha256,
     timestampForFile,
+    newResult,
+    noteTouched,
     readState,
     readRemoteIndex,
     writeRemoteIndex,
@@ -414,6 +500,7 @@ module.exports = {
     resolveDevice,
     collectContext,
     planOnly,
+    scopeDirStats,
     runUpload,
     runDownload,
     writeLocal,

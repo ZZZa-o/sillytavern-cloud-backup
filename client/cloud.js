@@ -11,8 +11,8 @@ import {
     setStatus, notify, withBusy,
 } from './panel.js';
 
-// 分组显示顺序：常用的四类在前，元数据与认不出来的垫底
-const GROUP_ORDER = ['角色卡', '聊天记录', '世界书', '设置', '其他', '插件元数据'];
+// 分组显示顺序：常用的几类在前，元数据与认不出来的垫底
+const GROUP_ORDER = ['角色卡', '聊天记录', '世界书', '预设', '美化', '设置', '其他', '插件元数据'];
 
 let items = [];
 const selected = new Set();
@@ -20,7 +20,7 @@ const selected = new Set();
 const expanded = new Set();
 
 function keyword() {
-    return $('#wdcb-cloud-search').val()?.toString().trim().toLowerCase() ?? '';
+    return $('#stcb-cloud-search').val()?.toString().trim().toLowerCase() ?? '';
 }
 
 function visibleItems() {
@@ -35,16 +35,16 @@ function groupOf(name) {
 }
 
 export function renderCloud() {
-    const list = $('#wdcb-cloud-list');
+    const list = $('#stcb-cloud-list');
     const visible = visibleItems();
 
     if (!items.length) {
-        list.html('<div class="wdcb-cloud-empty">还没有读取云端文件，点「刷新」。</div>');
-        $('#wdcb-cloud-meta').text('');
+        list.html('<div class="stcb-cloud-empty">还没有读取云端文件，点「刷新」。</div>');
+        $('#stcb-cloud-meta').text('');
         return;
     }
     if (!visible.length) {
-        list.html('<div class="wdcb-cloud-empty">没有匹配的文件。</div>');
+        list.html('<div class="stcb-cloud-empty">没有匹配的文件。</div>');
         renderMeta();
         return;
     }
@@ -62,20 +62,20 @@ export function renderCloud() {
                 const checked = selected.has(item.remote) ? ' checked' : '';
                 // 只显示分组下的相对路径，前缀已经写在分组标题上了
                 const shown = item.remote.split('/').slice(1).join('/') || item.remote;
-                return `<label class="wdcb-cloud-item">`
+                return `<label class="stcb-cloud-item">`
                     + `<input type="checkbox" value="${escHtml(item.remote)}"${checked}>`
-                    + `<span class="wdcb-cloud-name">${escHtml(shown)}</span>`
+                    + `<span class="stcb-cloud-name">${escHtml(shown)}</span>`
                     + `<small>${escHtml(prettyBytes(item.size))} · ${escHtml(prettyDate(item.modified))}</small>`
                     + `</label>`;
             }).join('');
             const allChecked = entries.every(item => selected.has(item.remote));
             // 搜索时强制展开，否则搜到了却看不见
             const open = keyword() || expanded.has(name) ? ' open' : '';
-            return `<details class="wdcb-cloud-group" data-group="${escHtml(name)}"${open}>`
+            return `<details class="stcb-cloud-group" data-group="${escHtml(name)}"${open}>`
                 + `<summary>`
-                + `<input type="checkbox" class="wdcb-cloud-group-check" data-group="${escHtml(name)}"${allChecked ? ' checked' : ''}>`
+                + `<input type="checkbox" class="stcb-cloud-group-check" data-group="${escHtml(name)}"${allChecked ? ' checked' : ''}>`
                 + `<span>${escHtml(name)} · ${entries.length}</span></summary>`
-                + `<div class="wdcb-cloud-rows">${rows}</div></details>`;
+                + `<div class="stcb-cloud-rows">${rows}</div></details>`;
         })
         .join('');
 
@@ -89,7 +89,7 @@ function renderMeta() {
     const parts = [`共 ${items.length} 个文件`];
     if (word) parts.push(`筛选出 ${visible.length} 个`);
     if (selected.size) parts.push(`已选 ${selected.size} 个`);
-    $('#wdcb-cloud-meta').text(parts.join('，'));
+    $('#stcb-cloud-meta').text(parts.join('，'));
 }
 
 /** 记住用户手动展开了哪些分组，重渲染时（比如整组勾选）不至于又全折回去。 */
@@ -134,7 +134,7 @@ export async function refreshCloud(showBusy = true) {
         try {
             await load();
         } catch (error) {
-            console.warn('[WebDAV Chat Backup] 读取云端文件失败：', error);
+            console.warn('[SillyTavern Cloud Backup] 读取云端文件失败：', error);
         }
         return;
     }

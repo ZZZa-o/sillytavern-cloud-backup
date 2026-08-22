@@ -1,12 +1,13 @@
 /** 全部动作：保存配置、测试连接、预览、上传、下载、自动执行。 */
 import { api, apiWithNames } from './api.js';
-import { getConfig, loadConfig, pushConfig, describeScope } from './settings.js';
+import { getConfig, loadConfig, pushConfig, describeScope, setScopeDirs } from './settings.js';
 import {
     escHtml,
     setStatus, notify, setReport, withBusy, isBusy,
     fillForm, renderPasswordState, renderScopeText, renderLastBackup, readFormIntoConfig,
 } from './panel.js';
 import { openScopePopup } from './scope.js';
+import { setEmbeddedBooks } from './tavern.js';
 import { reloadTouched } from './reload.js';
 import { refreshCloud } from './cloud.js';
 
@@ -17,12 +18,13 @@ import { refreshCloud } from './cloud.js';
 export async function checkHelper() {
     try {
         const data = await api('status');
-        $('#wdcb-helper-status').removeClass('is-muted is-error').addClass('is-ok').text('后端已连接');
+        $('#stcb-helper-status').removeClass('is-muted is-error').addClass('is-ok').text('后端已连接');
         renderPasswordState(!!data.hasPassword);
         renderLastBackup(data.lastBackupAt);
+        setScopeDirs(data.scopeDirs);
         return true;
     } catch (error) {
-        $('#wdcb-helper-status').removeClass('is-muted is-ok').addClass('is-error').text('后端未加载');
+        $('#stcb-helper-status').removeClass('is-muted is-ok').addClass('is-error').text('后端未加载');
         setStatus(`${error.message}（服务端插件只在酒馆启动时加载一次，装好后需要重启酒馆）`, 'error');
         return false;
     }
@@ -37,11 +39,26 @@ export async function bootstrap() {
     } catch (error) {
         setStatus(`读取配置失败：${error.message}`, 'error');
     }
+    // 不 await：卡多时首次解析要几秒，没必要卡住面板。名单到了再把范围文案重刷一遍。
+    refreshEmbeddedBooks().then(renderScopeText);
+}
+
+/**
+ * 拉取后端解析出的内嵌世界书名单。
+ * 失败只是内嵌的书可能重新出现在列表里，不该阻断任何操作。
+ */
+export async function refreshEmbeddedBooks() {
+    try {
+        const data = await api('cards/embedded-worlds');
+        setEmbeddedBooks(data.books);
+    } catch (error) {
+        console.warn('[SillyTavern Cloud Backup] 读取内嵌世界书名单失败：', error);
+    }
 }
 
 export async function saveConfig() {
     readFormIntoConfig();
-    const password = $('#wdcb-password').val()?.toString() ?? '';
+    const password = $('#stcb-password').val()?.toString() ?? '';
 
     await withBusy('正在保存配置...', async () => {
         await pushConfig(password);
@@ -63,6 +80,8 @@ export async function testConnection() {
 
 /** 范围弹窗点了确定就立刻落盘，免得用户以为选完就生效、结果没保存。 */
 export async function editScope() {
+    // 弹窗要按最新名单决定哪些世界书该隐藏，这里必须等
+    await refreshEmbeddedBooks();
     const confirmed = await openScopePopup();
     if (!confirmed) return;
     await withBusy('正在保存备份范围...', async () => {
@@ -84,14 +103,14 @@ const REASON_LABELS = {
 };
 
 function pill(label, value) {
-    return `<span class="wdcb-pill is-muted">${escHtml(label)} ${value}</span>`;
+    return `<span class="stcb-pill is-muted">${escHtml(label)} ${value}</span>`;
 }
 
 function group(summary, lines, open = false) {
     const body = lines.map(line => `<li>${line}</li>`).join('');
-    return `<details class="wdcb-plan-group"${open ? ' open' : ''}>`
+    return `<details class="stcb-plan-group"${open ? ' open' : ''}>`
         + `<summary>${escHtml(summary)}</summary>`
-        + `<ul class="wdcb-plan-list">${body}</ul></details>`;
+        + `<ul class="stcb-plan-list">${body}</ul></details>`;
 }
 
 function planLines(entries) {
@@ -106,7 +125,7 @@ export async function previewBackup() {
         const counts = plan.counts || {};
 
         if (!counts.upload && !counts.download) {
-            setReport(`<div class="wdcb-meta">范围：${escHtml(data.scopeText || describeScope())}<br>`
+            setReport(`<div class="stcb-meta">范围：${escHtml(data.scopeText || describeScope())}<br>`
                 + `两端已经一致，无需变更（${counts.unchanged || 0} 个文件相同）。</div>`);
             setStatus('比对完成：两端已一致。', 'ok');
             return;
@@ -116,11 +135,11 @@ export async function previewBackup() {
         if (counts.upload) blocks.push(group(`点「上传到云端」会推送 · ${counts.upload}`, planLines(plan.upload || [])));
         if (counts.download) blocks.push(group(`点「从云端下载」会拉取 · ${counts.download}`, planLines(plan.download || [])));
 
-        setReport(`<div class="wdcb-meta">范围：${escHtml(data.scopeText || describeScope())}`
+        setReport(`<div class="stcb-meta">范围：${escHtml(data.scopeText || describeScope())}`
             + `（相同 ${counts.unchanged || 0}）<br>`
             + `两端内容不同的文件会同时出现在上下两个清单里，按你点哪个按钮决定以谁为准。</div>`
             + blocks.join('')
-            + (plan.truncated ? '<div class="wdcb-meta">列表仅显示前 40 项。</div>' : ''));
+            + (plan.truncated ? '<div class="stcb-meta">列表仅显示前 40 项。</div>' : ''));
 
         setStatus(`比对完成：可上传 ${counts.upload || 0} 项，可下载 ${counts.download || 0} 项。`, 'ok');
     }, '比对失败。');
@@ -140,8 +159,8 @@ function renderResult(data, title) {
             `${escHtml(item.path)}<br><small>${escHtml(item.error)}</small>`), true)
         : '';
 
-    setReport(`<div class="wdcb-meta">${escHtml(title)}</div>`
-        + `<div class="wdcb-statusline">${pills || pill('无变化', '')}</div>`
+    setReport(`<div class="stcb-meta">${escHtml(title)}</div>`
+        + `<div class="stcb-statusline">${pills || pill('无变化', '')}</div>`
         + errors);
 }
 

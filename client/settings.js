@@ -9,16 +9,53 @@ export const DEFAULT_CONFIG = {
     url: '',
     username: '',
     remotePath: 'SillyTavern-WebDAV-Backup',
+    // 六类一律不勾：备份什么由用户自己去「范围」里决定
     scope: {
-        characters: { all: true, selected: [] },
-        chats: { enabled: true },
-        worlds: { all: true, selected: [] },
+        characters: { all: false, selected: [] },
+        chats: { enabled: false },
+        worlds: { all: false, selected: [] },
+        presets: {},
+        themes: {},
         settings: { enabled: false },
     },
     auto: { enabled: false, onChatEvents: true, intervalHours: 6 },
     hasPassword: false,
     lastBackupAt: '',
 };
+
+/**
+ * 预设与美化两组各有哪些目录，以及目录里的具体文件。
+ * 由后端 /status 提供 —— 目录清单是后端 paths.js 定的，前端不再抄一份。
+ *
+ * 每项形如：
+ *   { key, label, detail, files, bytes, entries?: [{ value, label, bytes }], excluded? }
+ * detail 为真才有 entries（可展开逐个勾）；背景图 detail 为假，只是个整类开关，
+ * excluded 是被排除掉的酒馆自带图张数。
+ */
+let scopeDirs = { presets: [], themes: [] };
+
+export function setScopeDirs(incoming) {
+    scopeDirs = {
+        presets: Array.isArray(incoming?.presets) ? incoming.presets : [],
+        themes: Array.isArray(incoming?.themes) ? incoming.themes : [],
+    };
+}
+
+export function getScopeDirs(group) {
+    return scopeDirs[group] || [];
+}
+
+/** 某个目录的选择集，配置里还没有这一项时给个空的（不会写回配置）。 */
+export function dirSelection(scope, group, key) {
+    return scope?.[group]?.[key] || { all: false, selected: [] };
+}
+
+/** 确保 scope[group][key] 真实存在，供弹窗直接改写。 */
+export function ensureDirSelection(scope, group, key) {
+    if (!scope[group] || typeof scope[group] !== 'object') scope[group] = {};
+    if (!scope[group][key]) scope[group][key] = { all: false, selected: [] };
+    return scope[group][key];
+}
 
 function clone(value) {
     return typeof structuredClone === 'function'
@@ -43,8 +80,10 @@ export function applyConfig(incoming = {}) {
         remotePath: incoming.remotePath || base.remotePath,
         scope: {
             characters: readSelection(scope.characters, base.scope.characters),
-            chats: { enabled: scope.chats?.enabled !== false },
+            chats: { enabled: scope.chats?.enabled === true },
             worlds: readSelection(scope.worlds, base.scope.worlds),
+            presets: readDirGroup(scope.presets),
+            themes: readDirGroup(scope.themes),
             settings: { enabled: scope.settings?.enabled === true },
         },
         auto: {
@@ -64,6 +103,16 @@ function readSelection(raw, fallback) {
         all: raw.all === true,
         selected: Array.isArray(raw.selected) ? raw.selected.map(String) : [],
     };
+}
+
+/** 预设/美化：目录键 → 文件级选择集。目录清单以后端为准，这里原样收下。 */
+function readDirGroup(raw) {
+    const out = {};
+    if (!raw || typeof raw !== 'object') return out;
+    for (const [key, value] of Object.entries(raw)) {
+        out[key] = readSelection(value, { all: false, selected: [] });
+    }
+    return out;
 }
 
 export async function loadConfig() {
@@ -99,7 +148,18 @@ export function selectionCount(selection, total) {
 }
 
 /**
- * 四类各自是否算"已选择"，决定按钮要不要加粗。
+ * 预设/美化某一组里，有没有哪个目录被勾了。
+ *
+ * 目录里一个文件都没有时一律算没勾 —— 与世界书同理，
+ * 点亮一个实际上什么都不会传的按钮只会骗人。
+ */
+function dirGroupEnabled(scope, group) {
+    return getScopeDirs(group).some(dir =>
+        dir.files > 0 && !selectionEmpty(dirSelection(scope, group, dir.key)));
+}
+
+/**
+ * 六类各自是否算"已选择"，决定按钮要不要加粗。
  * 数量为 0 时一律算没选 —— 比如世界书全被角色卡内嵌了，独立世界书一本都没有，
  * 这时候还把按钮点亮就是在骗人。
  */
@@ -108,8 +168,25 @@ export function scopeEnabled(scope = getConfig().scope) {
         characters: !selectionEmpty(scope.characters) && characterEntries().length > 0,
         chats: scope.chats?.enabled === true,
         worlds: !selectionEmpty(scope.worlds) && worldEntries().length > 0,
+        presets: dirGroupEnabled(scope, 'presets'),
+        themes: dirGroupEnabled(scope, 'themes'),
         settings: scope.settings?.enabled === true,
     };
+}
+
+/** 预设/美化某一组的文案片段："OpenAI 预设 全部 3 个、UI 主题 5 个"。 */
+function describeDirGroup(scope, group) {
+    const parts = [];
+    for (const dir of getScopeDirs(group)) {
+        if (!dir.files) continue;
+        const selection = dirSelection(scope, group, dir.key);
+        if (selectionEmpty(selection)) continue;
+        // 背景图没有明细可选，只是个整类开关，说"全部"反而让人以为还有别的粒度
+        if (!dir.detail) parts.push(dir.label);
+        else if (selection.all) parts.push(`${dir.label} 全部 ${dir.files} 个`);
+        else parts.push(`${dir.label} ${selection.selected.length} 个`);
+    }
+    return parts;
 }
 
 /** "当前已选择同步范围：xxx" 里的那段 xxx。 */
@@ -128,6 +205,9 @@ export function describeScope(scope = getConfig().scope) {
         if (scope.worlds?.all) parts.push(`世界书 全部 ${worldTotal} 本`);
         else if (scope.worlds?.selected?.length) parts.push(`世界书 ${scope.worlds.selected.length} 本`);
     }
+
+    parts.push(...describeDirGroup(scope, 'presets'));
+    parts.push(...describeDirGroup(scope, 'themes'));
 
     if (scope.settings?.enabled) parts.push('设置');
 

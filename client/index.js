@@ -19,8 +19,9 @@ import {
     autoMaybeRun, autoQueue, autoTimer,
 } from './actions.js';
 import { refreshCloud, downloadSelected, deleteSelected, renderCloud, toggleItem, toggleGroup, noteToggle } from './cloud.js';
+import { ensureRecentSortOption } from './reload.js';
 
-const AUTO_INPUTS = ['#wdcb-auto-enabled', '#wdcb-auto-events', '#wdcb-auto-hours'].join(', ');
+const AUTO_INPUTS = ['#stcb-auto-enabled', '#stcb-auto-events', '#stcb-auto-hours'].join(', ');
 
 const CHAT_EVENTS = [
     'MESSAGE_SENT',
@@ -36,28 +37,28 @@ const CHAT_EVENTS = [
 function bindEvents() {
     const on = (id, handler) => $(`#${id}`).on('click', handler);
 
-    on('wdcb-save-config', saveConfig);
-    on('wdcb-test', testConnection);
-    on('wdcb-scope', editScope);
+    on('stcb-save-config', saveConfig);
+    on('stcb-test', testConnection);
+    on('stcb-scope', editScope);
 
-    on('wdcb-preview', previewBackup);
-    on('wdcb-upload', () => runUpload('manual'));
-    on('wdcb-download', runDownload);
+    on('stcb-preview', previewBackup);
+    on('stcb-upload', () => runUpload('manual'));
+    on('stcb-download', runDownload);
 
-    on('wdcb-cloud-refresh', () => refreshCloud(true));
-    on('wdcb-cloud-download', downloadSelected);
-    on('wdcb-cloud-delete', deleteSelected);
+    on('stcb-cloud-refresh', () => refreshCloud(true));
+    on('stcb-cloud-download', downloadSelected);
+    on('stcb-cloud-delete', deleteSelected);
 
-    $('#wdcb-cloud-search').on('input', renderCloud);
-    $('#wdcb-cloud-list').on('change', 'input[type="checkbox"]', function () {
+    $('#stcb-cloud-search').on('input', renderCloud);
+    $('#stcb-cloud-list').on('change', 'input[type="checkbox"]', function () {
         const group = this.dataset.group;
         if (group) toggleGroup(group, this.checked);
         else toggleItem(this.value, this.checked);
     });
     // details 的展开状态得自己记，重渲染会把 DOM 整个换掉。
     // toggle 事件不冒泡，jQuery 的事件委托接不到，只能用捕获阶段。
-    document.querySelector('#wdcb-cloud-list')?.addEventListener('toggle', event => {
-        const details = event.target?.closest?.('details.wdcb-cloud-group');
+    document.querySelector('#stcb-cloud-list')?.addEventListener('toggle', event => {
+        const details = event.target?.closest?.('details.stcb-cloud-group');
         if (details) noteToggle(details.dataset.group, details.open);
     }, true);
 
@@ -68,7 +69,7 @@ function bindEvents() {
         try {
             await pushConfig();
         } catch (error) {
-            console.warn('[WebDAV Chat Backup] 保存自动执行设置失败：', error);
+            console.warn('[SillyTavern Cloud Backup] 保存自动执行设置失败：', error);
         }
     });
 
@@ -83,6 +84,9 @@ function bindEvents() {
 jQuery(async () => {
     buildPanel();
     bindEvents();
+    // 排序选项要早点补上：用户上次就停在「最近导入」的话，
+    // 酒馆已经按它排好了列表，下拉框却因为找不到这个选项而显示空白
+    ensureRecentSortOption();
     renderCloud();
     await bootstrap();
     autoTimer();

@@ -1,60 +1,60 @@
-.wdcb-shell,
-.wdcb-scope-popup {
-    --wdcb-border: color-mix(in srgb, var(--SmartThemeBodyColor) 18%, transparent);
-    --wdcb-muted: color-mix(in srgb, var(--SmartThemeBodyColor) 62%, transparent);
-    --wdcb-surface: color-mix(in srgb, var(--SmartThemeBlurTintColor) 78%, transparent);
-    --wdcb-accent: #2f9e8f;
-    --wdcb-warn: #b9842f;
-    --wdcb-danger: #bd4b5a;
+.stcb-shell,
+.stcb-scope-popup {
+    --stcb-border: color-mix(in srgb, var(--SmartThemeBodyColor) 18%, transparent);
+    --stcb-muted: color-mix(in srgb, var(--SmartThemeBodyColor) 62%, transparent);
+    --stcb-surface: color-mix(in srgb, var(--SmartThemeBlurTintColor) 78%, transparent);
+    --stcb-accent: #2f9e8f;
+    --stcb-warn: #b9842f;
+    --stcb-danger: #bd4b5a;
 }
 
-.wdcb-shell {
+.stcb-shell {
     margin-top: 2px;
     font-size: 13px;
     line-height: 1.15;
 }
 
-.wdcb-shell .inline-drawer-content {
+.stcb-shell .inline-drawer-content {
     padding: 5px 8px 0;
 }
 
-.wdcb-shell .inline-drawer-header b {
+.stcb-shell .inline-drawer-header b {
     display: inline-flex;
     align-items: center;
     gap: 6px;
 }
 
-.wdcb-statusline {
+.stcb-statusline {
     display: flex;
     flex-wrap: wrap;
     gap: 3px;
     margin-bottom: 4px;
 }
 
-.wdcb-pill {
+.stcb-pill {
     display: inline-flex;
     align-items: center;
     min-height: 16px;
     padding: 1px 5px;
-    border: 1px solid var(--wdcb-border);
+    border: 1px solid var(--stcb-border);
     border-radius: 999px;
     font-size: 11px;
     line-height: 1.1;
-    color: var(--wdcb-muted);
+    color: var(--stcb-muted);
 }
 
-.wdcb-pill.is-ok {
-    border-color: color-mix(in srgb, var(--wdcb-accent) 55%, transparent);
-    color: color-mix(in srgb, var(--wdcb-accent) 82%, var(--SmartThemeBodyColor));
+.stcb-pill.is-ok {
+    border-color: color-mix(in srgb, var(--stcb-accent) 55%, transparent);
+    color: color-mix(in srgb, var(--stcb-accent) 82%, var(--SmartThemeBodyColor));
 }
 
-.wdcb-pill.is-error {
-    border-color: color-mix(in srgb, var(--wdcb-danger) 55%, transparent);
-    color: color-mix(in srgb, var(--wdcb-danger) 84%, var(--SmartThemeBodyColor));
+.stcb-pill.is-error {
+    border-color: color-mix(in srgb, var(--stcb-danger) 55%, transparent);
+    color: color-mix(in srgb, var(--stcb-danger) 84%, var(--SmartThemeBodyColor));
 }
 
-.wdcb-section {
-    border-top: 1px solid var(--wdcb-border);
+.stcb-section {
+    border-top: 1px solid var(--stcb-border);
     display: flex;
     align-items: center;
     flex-wrap: wrap;
@@ -63,7 +63,7 @@
     margin-top: 4px;
 }
 
-.wdcb-section-title {
+.stcb-section-title {
     flex: 0 0 auto;
     font-weight: 700;
     margin: 0 4px 0 0;
@@ -71,7 +71,7 @@
     line-height: 1;
 }
 
-.wdcb-grid {
+.stcb-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(180px, 1fr));
     flex: 1 1 100%;
@@ -79,25 +79,25 @@
     row-gap: 4px;
 }
 
-.wdcb-field {
+.stcb-field {
     display: flex;
     min-width: 0;
     flex-direction: column;
     gap: 1px;
 }
 
-.wdcb-field span,
-.wdcb-inline-field span {
+.stcb-field span,
+.stcb-inline-field span {
     font-size: 11px;
     line-height: 1.1;
-    color: var(--wdcb-muted);
+    color: var(--stcb-muted);
 }
 
-.wdcb-field input,
-.wdcb-field select,
-.wdcb-inline-field input,
-.wdcb-inline-field select,
-.wdcb-cloud-search {
+.stcb-field input,
+.stcb-field select,
+.stcb-inline-field input,
+.stcb-inline-field select,
+.stcb-cloud-search {
     width: 100%;
     min-width: 0;
     box-sizing: border-box;
@@ -109,20 +109,20 @@
     line-height: 1.1 !important;
 }
 
-.wdcb-auto-row,
-.wdcb-actions {
+.stcb-auto-row,
+.stcb-actions {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
     gap: 4px 5px;
 }
 
-.wdcb-actions {
+.stcb-actions {
     margin-top: 2px;
     gap: 3px;
 }
 
-.wdcb-shell .checkbox_label {
+.stcb-shell .checkbox_label {
     min-height: 18px;
     margin: 0;
     gap: 3px;
@@ -130,14 +130,14 @@
     font-size: 12.5px;
 }
 
-.wdcb-shell .checkbox_label input[type="checkbox"] {
+.stcb-shell .checkbox_label input[type="checkbox"] {
     width: 15px;
     height: 15px;
     margin: 0 3px 0 0;
 }
 
-.wdcb-shell .menu_button,
-.wdcb-scope-popup .menu_button {
+.stcb-shell .menu_button,
+.stcb-scope-popup .menu_button {
     display: inline-flex !important;
     flex: 0 0 auto;
     flex-direction: row !important;
@@ -157,8 +157,8 @@
     font-size: 12px;
 }
 
-.wdcb-shell .menu_button i,
-.wdcb-scope-popup .menu_button i {
+.stcb-shell .menu_button i,
+.stcb-scope-popup .menu_button i {
     display: inline-flex !important;
     align-items: center;
     justify-content: center;
@@ -169,8 +169,8 @@
     line-height: 1;
 }
 
-.wdcb-shell .menu_button span,
-.wdcb-scope-popup .menu_button span {
+.stcb-shell .menu_button span,
+.stcb-scope-popup .menu_button span {
     display: inline-block;
     line-height: 1;
     white-space: nowrap;
@@ -180,75 +180,75 @@
 
 /* 上面那条 display:inline-flex 带 !important，会盖过 [hidden] 自带的 display:none，
    所以要显式再压回去 —— 否则「仅当前角色」会跑到世界书菜单里去 */
-.wdcb-shell .menu_button[hidden],
-.wdcb-scope-popup .menu_button[hidden] {
+.stcb-shell .menu_button[hidden],
+.stcb-scope-popup .menu_button[hidden] {
     display: none !important;
 }
 
-.wdcb-shell .menu_button.primary {
-    border-color: color-mix(in srgb, var(--wdcb-accent) 62%, var(--wdcb-border));
+.stcb-shell .menu_button.primary {
+    border-color: color-mix(in srgb, var(--stcb-accent) 62%, var(--stcb-border));
 }
 
-.wdcb-shell .menu_button.danger {
-    border-color: color-mix(in srgb, var(--wdcb-danger) 55%, var(--wdcb-border));
+.stcb-shell .menu_button.danger {
+    border-color: color-mix(in srgb, var(--stcb-danger) 55%, var(--stcb-border));
 }
 
-.wdcb-meta {
+.stcb-meta {
     flex: 1 1 100%;
     display: none;
     min-height: 0;
     margin-top: 0;
     font-size: 11px;
-    color: var(--wdcb-muted);
+    color: var(--stcb-muted);
     overflow-wrap: anywhere;
 }
 
-.wdcb-meta:not(:empty) {
+.stcb-meta:not(:empty) {
     display: block;
 }
 
-.wdcb-inline-field {
+.stcb-inline-field {
     display: inline-flex;
     align-items: center;
     gap: 3px;
     min-height: 22px;
 }
 
-.wdcb-inline-field input {
+.stcb-inline-field input {
     width: 54px;
     text-align: center;
 }
 
-.wdcb-report {
+.stcb-report {
     flex: 1 1 100%;
     min-width: 0;
     margin-top: 2px;
 }
 
-.wdcb-report:empty {
+.stcb-report:empty {
     display: none;
 }
 
-.wdcb-plan-group {
+.stcb-plan-group {
     margin-top: 3px;
-    border: 1px solid var(--wdcb-border);
+    border: 1px solid var(--stcb-border);
     border-radius: 5px;
-    background: var(--wdcb-surface);
+    background: var(--stcb-surface);
     font-size: 11.5px;
 }
 
-.wdcb-plan-group > summary {
+.stcb-plan-group > summary {
     padding: 3px 6px;
     cursor: pointer;
     line-height: 1.15;
-    color: var(--wdcb-muted);
+    color: var(--stcb-muted);
 }
 
-.wdcb-plan-group[open] > summary {
-    border-bottom: 1px solid var(--wdcb-border);
+.stcb-plan-group[open] > summary {
+    border-bottom: 1px solid var(--stcb-border);
 }
 
-.wdcb-plan-list {
+.stcb-plan-list {
     max-height: 180px;
     margin: 0;
     padding: 4px 6px 4px 20px;
@@ -257,41 +257,41 @@
     line-height: 1.3;
 }
 
-.wdcb-plan-list li {
+.stcb-plan-list li {
     margin: 0 0 2px;
 }
 
-.wdcb-plan-list small {
-    color: var(--wdcb-muted);
+.stcb-plan-list small {
+    color: var(--stcb-muted);
     font-size: 10.5px;
 }
 
-.wdcb-auto-row {
+.stcb-auto-row {
     flex: 0 1 auto;
     margin: 0;
 }
 
-.wdcb-section-auto {
+.stcb-section-auto {
     align-items: center;
     padding-bottom: 0;
     margin-bottom: 0;
 }
 
-.wdcb-status {
+.stcb-status {
     min-height: 16px;
     margin-top: 4px;
     padding: 4px 6px;
-    border: 1px solid var(--wdcb-border);
+    border: 1px solid var(--stcb-border);
     border-radius: 6px;
-    color: var(--wdcb-muted);
-    background: var(--wdcb-surface);
+    color: var(--stcb-muted);
+    background: var(--stcb-surface);
     overflow-wrap: anywhere;
     font-size: 11.5px;
     line-height: 1.15;
 }
 
-.wdcb-meta:empty,
-.wdcb-status:empty {
+.stcb-meta:empty,
+.stcb-status:empty {
     display: none !important;
     min-height: 0 !important;
     height: 0 !important;
@@ -300,26 +300,26 @@
     border: 0 !important;
 }
 
-.wdcb-status.is-ok {
-    color: color-mix(in srgb, var(--wdcb-accent) 72%, var(--SmartThemeBodyColor));
+.stcb-status.is-ok {
+    color: color-mix(in srgb, var(--stcb-accent) 72%, var(--SmartThemeBodyColor));
 }
 
-.wdcb-status.is-warn {
-    color: color-mix(in srgb, var(--wdcb-warn) 78%, var(--SmartThemeBodyColor));
+.stcb-status.is-warn {
+    color: color-mix(in srgb, var(--stcb-warn) 78%, var(--SmartThemeBodyColor));
 }
 
-.wdcb-status.is-error {
-    color: color-mix(in srgb, var(--wdcb-danger) 78%, var(--SmartThemeBodyColor));
+.stcb-status.is-error {
+    color: color-mix(in srgb, var(--stcb-danger) 78%, var(--SmartThemeBodyColor));
 }
 
 /* --- 云端文件管理 ------------------------------------------------------- */
 
-.wdcb-cloud-search {
+.stcb-cloud-search {
     flex: 1 1 100%;
     margin-top: 2px;
 }
 
-.wdcb-cloud-list {
+.stcb-cloud-list {
     flex: 1 1 100%;
     min-width: 0;
     max-height: 260px;
@@ -327,38 +327,38 @@
     overflow-y: auto;
 }
 
-.wdcb-cloud-empty {
+.stcb-cloud-empty {
     padding: 4px 2px;
     font-size: 11.5px;
-    color: var(--wdcb-muted);
+    color: var(--stcb-muted);
 }
 
-.wdcb-cloud-group {
+.stcb-cloud-group {
     margin-bottom: 3px;
-    border: 1px solid var(--wdcb-border);
+    border: 1px solid var(--stcb-border);
     border-radius: 5px;
-    background: var(--wdcb-surface);
+    background: var(--stcb-surface);
 }
 
-.wdcb-cloud-group > summary {
+.stcb-cloud-group > summary {
     display: flex;
     align-items: center;
     gap: 5px;
     padding: 3px 6px;
     cursor: pointer;
     font-size: 11.5px;
-    color: var(--wdcb-muted);
+    color: var(--stcb-muted);
 }
 
-.wdcb-cloud-group[open] > summary {
-    border-bottom: 1px solid var(--wdcb-border);
+.stcb-cloud-group[open] > summary {
+    border-bottom: 1px solid var(--stcb-border);
 }
 
-.wdcb-cloud-rows {
+.stcb-cloud-rows {
     padding: 2px 6px 4px;
 }
 
-.wdcb-cloud-item {
+.stcb-cloud-item {
     display: flex;
     align-items: center;
     gap: 5px;
@@ -369,30 +369,30 @@
     line-height: 1.2;
 }
 
-.wdcb-cloud-item input[type="checkbox"],
-.wdcb-cloud-group-check {
+.stcb-cloud-item input[type="checkbox"],
+.stcb-cloud-group-check {
     flex: 0 0 auto;
     width: 14px;
     height: 14px;
     margin: 0;
 }
 
-.wdcb-cloud-name {
+.stcb-cloud-name {
     flex: 1 1 auto;
     min-width: 0;
     overflow-wrap: anywhere;
 }
 
-.wdcb-cloud-item small {
+.stcb-cloud-item small {
     flex: 0 0 auto;
-    color: var(--wdcb-muted);
+    color: var(--stcb-muted);
     font-size: 10.5px;
     white-space: nowrap;
 }
 
 /* --- 备份范围弹窗 ------------------------------------------------------- */
 
-.wdcb-scope-popup {
+.stcb-scope-popup {
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -401,52 +401,52 @@
     font-size: 13px;
 }
 
-.wdcb-scope-buttons {
+.stcb-scope-buttons {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
     gap: 6px;
 }
 
-.wdcb-scope-popup .wdcb-scope-btn {
+.stcb-scope-popup .stcb-scope-btn {
     width: 100% !important;
     min-height: 34px !important;
     height: auto !important;
     padding: 6px 8px !important;
-    border: 1px solid var(--wdcb-border);
+    border: 1px solid var(--stcb-border);
     font-size: 13px;
 }
 
 /* 已选中的类别：边框加粗高亮，一眼能看出这次备份包含什么 */
-.wdcb-scope-popup .wdcb-scope-btn.is-selected {
+.stcb-scope-popup .stcb-scope-btn.is-selected {
     border-width: 2px;
-    border-color: var(--wdcb-accent);
-    color: color-mix(in srgb, var(--wdcb-accent) 80%, var(--SmartThemeBodyColor));
+    border-color: var(--stcb-accent);
+    color: color-mix(in srgb, var(--stcb-accent) 80%, var(--SmartThemeBodyColor));
     font-weight: 700;
 }
 
-.wdcb-scope-note {
+.stcb-scope-note {
     padding: 5px 7px;
-    border: 1px solid var(--wdcb-border);
+    border: 1px solid var(--stcb-border);
     border-radius: 5px;
-    background: var(--wdcb-surface);
+    background: var(--stcb-surface);
     font-size: 12px;
     overflow-wrap: anywhere;
 }
 
-.wdcb-scope-hint {
+.stcb-scope-hint {
     font-size: 11px;
     line-height: 1.4;
-    color: var(--wdcb-muted);
+    color: var(--stcb-muted);
 }
 
-.wdcb-scope-head {
+.stcb-scope-head {
     display: flex;
     align-items: center;
     gap: 5px;
     flex-wrap: wrap;
 }
 
-.wdcb-scope-search {
+.stcb-scope-search {
     width: 100%;
     box-sizing: border-box;
     min-height: 26px !important;
@@ -454,16 +454,16 @@
     font-size: 12.5px;
 }
 
-.wdcb-scope-list {
+.stcb-scope-list {
     max-height: min(46vh, 340px);
     padding: 3px 4px;
-    border: 1px solid var(--wdcb-border);
+    border: 1px solid var(--stcb-border);
     border-radius: 5px;
-    background: var(--wdcb-surface);
+    background: var(--stcb-surface);
     overflow-y: auto;
 }
 
-.wdcb-scope-item {
+.stcb-scope-item {
     display: flex;
     align-items: center;
     gap: 6px;
@@ -473,52 +473,136 @@
     line-height: 1.2;
 }
 
-.wdcb-scope-item:hover {
+.stcb-scope-item:hover {
     background: color-mix(in srgb, var(--SmartThemeBodyColor) 8%, transparent);
     border-radius: 4px;
 }
 
-.wdcb-scope-item input[type="checkbox"] {
+.stcb-scope-item input[type="checkbox"] {
     flex: 0 0 auto;
     width: 15px;
     height: 15px;
     margin: 0;
 }
 
-.wdcb-scope-item span {
+.stcb-scope-item span {
     flex: 1 1 auto;
     min-width: 0;
     overflow-wrap: anywhere;
 }
 
-.wdcb-scope-tag {
+.stcb-scope-tag {
     flex: 0 0 auto;
     padding: 0 5px;
-    border: 1px solid color-mix(in srgb, var(--wdcb-accent) 55%, transparent);
+    border: 1px solid color-mix(in srgb, var(--stcb-accent) 55%, transparent);
     border-radius: 999px;
-    color: color-mix(in srgb, var(--wdcb-accent) 82%, var(--SmartThemeBodyColor));
+    color: color-mix(in srgb, var(--stcb-accent) 82%, var(--SmartThemeBodyColor));
     font-size: 10.5px;
 }
 
 /* 有引用但角色卡里没内嵌副本的世界书：必须自己勾，用告警色提醒 */
-.wdcb-scope-tag.is-warn {
-    border-color: color-mix(in srgb, var(--wdcb-warn) 60%, transparent);
-    color: color-mix(in srgb, var(--wdcb-warn) 85%, var(--SmartThemeBodyColor));
+.stcb-scope-tag.is-warn {
+    border-color: color-mix(in srgb, var(--stcb-warn) 60%, transparent);
+    color: color-mix(in srgb, var(--stcb-warn) 85%, var(--SmartThemeBodyColor));
 }
 
-.wdcb-scope-empty,
-.wdcb-scope-count {
+.stcb-scope-empty,
+.stcb-scope-count {
     padding: 4px 3px;
     font-size: 11.5px;
-    color: var(--wdcb-muted);
+    color: var(--stcb-muted);
+}
+
+/* 预设与美化的文件夹视图：一个目录一块，展开逐个勾文件。
+   没有用 details/summary —— 整组开关就摆在标题上，浏览器那套"点标题就折叠"
+   会让勾选顺带收起目录。折叠由 JS 自己管，标题行只是普通的一行。 */
+
+.stcb-scope-folder {
+    margin-bottom: 4px;
+    border: 1px solid var(--stcb-border);
+    border-radius: 5px;
+    background: var(--stcb-surface);
+}
+
+.stcb-scope-folder-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 7px;
+    cursor: pointer;
+    font-size: 12.5px;
+}
+
+.stcb-scope-folder.is-open > .stcb-scope-folder-head {
+    border-bottom: 1px solid var(--stcb-border);
+}
+
+.stcb-scope-folder-caret {
+    flex: 0 0 auto;
+    width: 10px;
+    font-size: 10px;
+    color: var(--stcb-muted);
+}
+
+.stcb-scope-folder-head > span {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.stcb-scope-folder-head > small {
+    flex: 0 0 auto;
+    color: var(--stcb-muted);
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+.stcb-scope-folder-rows {
+    padding: 3px 7px 5px;
+}
+
+.stcb-scope-folder-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 22px;
+    padding: 1px 2px;
+    cursor: pointer;
+    font-size: 12px;
+    line-height: 1.2;
+}
+
+.stcb-scope-folder-item:hover {
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 8%, transparent);
+    border-radius: 4px;
+}
+
+.stcb-scope-folder-item > span {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.stcb-scope-folder-item > small {
+    flex: 0 0 auto;
+    color: var(--stcb-muted);
+    font-size: 10.5px;
+    white-space: nowrap;
+}
+
+.stcb-scope-folder input[type="checkbox"] {
+    flex: 0 0 auto;
+    width: 15px;
+    height: 15px;
+    margin: 0;
 }
 
 @media (max-width: 720px) {
-    .wdcb-grid {
+    .stcb-grid {
         grid-template-columns: 1fr;
     }
 
-    .wdcb-scope-buttons {
+    .stcb-scope-buttons {
         grid-template-columns: 1fr;
     }
 }

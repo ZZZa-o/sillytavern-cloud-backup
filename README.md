@@ -1,11 +1,14 @@
-# 聊天云备份 for SillyTavern
+# SillyTavern Cloud Backup
 
-把 SillyTavern 的角色卡、聊天记录、世界书、设置备份到 WebDAV 网盘。前端扩展 + 一个很小的服务端插件，避开浏览器直连 WebDAV 的跨域限制。
+把 SillyTavern 的角色卡、聊天记录、世界书、预设、美化、设置备份到 WebDAV 网盘。前端扩展 + 一个很小的服务端插件，避开浏览器直连 WebDAV 的跨域限制。
+
+装好之后在酒馆的「扩展」页面里显示为**酒馆云备份**。
 
 WebDAV 地址由用户手动填写，不内置任何服务商的固定地址。
 
 - [它能做什么](#它能做什么)
 - [安装](#安装)
+- [Docker / NAS / VPS 安装](#docker--nas--vps-安装)
 - [首次使用](#首次使用)
 - [备份范围怎么选](#备份范围怎么选)
 - [上传与下载](#上传与下载)
@@ -23,8 +26,9 @@ WebDAV 地址由用户手动填写，不内置任何服务商的固定地址。
 - **精确到单张角色卡的范围选择**：不是"要么全备份要么不备份"，可以只备份你在意的那几张卡。
 - **聊天记录跟随角色卡**：选了哪些角色，就备份哪些角色的聊天，不用单独再选一遍。
 - **云端按角色名存放**：本地 png 文件名是一串乱码的卡，在网盘里也按角色名显示，一眼能认出来。
-- **世界书只列独立的**：已经内嵌在角色卡里的世界书不会重复出现，跟着角色卡一起备份。
-- **下载完直接可用**：角色卡与世界书会自动刷进酒馆，不用重载页面。
+- **世界书只列独立的**：已经内嵌在角色卡里的世界书不会重复出现，跟着角色卡一起备份。开了 `lazyLoadCharacters` 也判得准。
+- **预设与美化按文件勾选**：OpenAI 预设、快速回复、UI 主题都能勾到具体某一个；背景图只备份你自己上传的，酒馆自带的那批风景图不会传。
+- **下载完直接可用**：角色卡、世界书、预设、主题、背景图都会自动刷进酒馆，不用重载页面。
 - **只有上传和下载两个动作**，没有难以理解的"双向同步"。
 - **云端文件管理**：直接在面板里浏览网盘上的备份，可搜索，可指定下载某个文件，可删除。
 - **跳过没变的文件**：按内容哈希比对，重复上传不消耗流量。
@@ -35,7 +39,7 @@ WebDAV 地址由用户手动填写，不内置任何服务商的固定地址。
 
 这个扩展包含两部分：前端扩展和服务端插件。**两部分都要装**，且**装完必须重启 SillyTavern** —— 服务端插件只在酒馆启动时加载一次，不重启面板上就会显示「后端未加载」。
 
-仓库地址：[https://github.com/ZZZa-o/sillytavern-webdav-chat-backup](https://github.com/ZZZa-o/sillytavern-webdav-chat-backup)
+仓库地址：[https://github.com/ZZZa-o/sillytavern-cloud-backup](https://github.com/ZZZa-o/sillytavern-cloud-backup)
 
 ### 方式一：一键安装（推荐）
 
@@ -50,7 +54,7 @@ WebDAV 地址由用户手动填写，不内置任何服务商的固定地址。
 2. 再运行安装脚本：
 
    ```bash
-   bash <(curl -sL https://cdn.jsdelivr.net/gh/ZZZa-o/sillytavern-webdav-chat-backup@main/install.sh)
+   bash <(curl -sL https://cdn.jsdelivr.net/gh/ZZZa-o/sillytavern-cloud-backup@main/install.sh)
    ```
 
 #### Linux / macOS 用户
@@ -58,7 +62,7 @@ WebDAV 地址由用户手动填写，不内置任何服务商的固定地址。
 只需要运行一条命令：
 
 ```bash
-bash <(curl -sL https://cdn.jsdelivr.net/gh/ZZZa-o/sillytavern-webdav-chat-backup@main/install.sh)
+bash <(curl -sL https://cdn.jsdelivr.net/gh/ZZZa-o/sillytavern-cloud-backup@main/install.sh)
 ```
 
 提示找不到 git 的话，先按系统装一下：Debian/Ubuntu 用 `sudo apt install git`，macOS 用 `brew install git`。
@@ -72,7 +76,7 @@ Windows 没有自带 bash。装了 Git for Windows 之后，在酒馆目录里�
 - 上面用的是 jsDelivr 链接，国内访问通常更稳。也可以换成原始链接：
 
   ```bash
-  bash <(curl -sL https://raw.githubusercontent.com/ZZZa-o/sillytavern-webdav-chat-backup/main/install.sh)
+  bash <(curl -sL https://raw.githubusercontent.com/ZZZa-o/sillytavern-cloud-backup/main/install.sh)
   ```
 
 - 必须用 `bash` 执行，不能用 `sh`。
@@ -84,14 +88,14 @@ Windows 没有自带 bash。装了 Git for Windows 之后，在酒馆目录里�
 
 - 脚本做三件事：安装前端扩展、安装服务端插件、把 `config.yaml` 里的 `enableServerPlugins` 设为 `true`（改动前会备份原文件）。装完重启酒馆即可。
 - **以后再次运行同一条命令就是更新。**
-- 如果之前是手动复制安装的，脚本会把旧目录移到 `_webdav-chat-backup-old/` 再重新安装。旧目录必须挪出 `plugins/`，否则酒馆会把它当成第二个插件加载并报 id 冲突。
+- 如果之前是手动复制安装的，脚本会把旧目录移到 `_sillytavern-cloud-backup-old/` 再重新安装。旧目录必须挪出 `plugins/`，否则酒馆会把它当成第二个插件加载并报 id 冲突。
 
 ### 方式二：两条 git 命令
 
 ```bash
 cd ~/SillyTavern
-git clone https://github.com/ZZZa-o/sillytavern-webdav-chat-backup.git plugins/webdav-chat-backup
-git clone https://github.com/ZZZa-o/sillytavern-webdav-chat-backup.git public/scripts/extensions/third-party/webdav-chat-backup
+git clone https://github.com/ZZZa-o/sillytavern-cloud-backup.git plugins/sillytavern-cloud-backup
+git clone https://github.com/ZZZa-o/sillytavern-cloud-backup.git public/scripts/extensions/third-party/sillytavern-cloud-backup
 ```
 
 然后在 `config.yaml` 里设置 `enableServerPlugins: true` 并重启。
@@ -103,16 +107,16 @@ git clone https://github.com/ZZZa-o/sillytavern-webdav-chat-backup.git public/sc
 1. 把本项目整个文件夹复制到：
 
    ```text
-   SillyTavern/public/scripts/extensions/third-party/webdav-chat-backup
+   SillyTavern/public/scripts/extensions/third-party/sillytavern-cloud-backup
    ```
 
 2. 再把 `server/` 目录和 `package.json` 一起复制到：
 
    ```text
-   SillyTavern/plugins/webdav-chat-backup/
+   SillyTavern/plugins/sillytavern-cloud-backup/
    ```
 
-   复制后应该是 `plugins/webdav-chat-backup/package.json` 和 `plugins/webdav-chat-backup/server/index.js`。
+   复制后应该是 `plugins/sillytavern-cloud-backup/package.json` 和 `plugins/sillytavern-cloud-backup/server/index.js`。
    `package.json` 不能漏，插件加载器靠它里面的 `main` 找到入口。
 
 3. 打开 SillyTavern 的 `config.yaml`，确认服务端插件已启用：
@@ -123,13 +127,66 @@ git clone https://github.com/ZZZa-o/sillytavern-webdav-chat-backup.git public/sc
 
 4. 重启 SillyTavern。
 
-5. 进入 SillyTavern 的「扩展」页面，展开「聊天云备份」。
+5. 进入 SillyTavern 的「扩展」页面，展开「酒馆云备份」。
 
 ### 关于自动更新
 
 用方式一或方式二安装时，插件目录本身就是一个 git 仓库。SillyTavern 的 `enableServerPluginsAutoUpdate` 默认为 `true`，会在每次启动时自动拉取服务端插件的更新。不想要这个行为就在 `config.yaml` 里关掉它。
 
 手动复制安装（方式三）不具备自动更新能力。
+
+## Docker / NAS / VPS 安装
+
+Docker 部署的酒馆有一个绕不过去的前提：**服务端插件必须落在容器的 `/home/node/app/plugins` 里**。官方镜像把这个目录设计成挂载卷，但不少教程只映射了 `config` 和 `data`，没映射 `plugins`。这种情况下无论怎么装，酒馆启动时都读不到插件，面板上就一直显示「后端未加载」。
+
+前端扩展没有这个问题 —— 直接在酒馆的「扩展」页面用 GitHub 链接安装就行，它落在 `data/<用户>/extensions/` 里，而 `data` 必然是映射出来的。
+
+### 先确认容器映射了哪些目录
+
+在 NAS 或 VPS 的终端里：
+
+```bash
+docker ps --format '{{.Names}}\t{{.Image}}'
+docker inspect <容器名> --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{println}}{{end}}'
+```
+
+第二条命令的输出里找有没有这一行：
+
+```text
+/宿主机/某个路径  ->  /home/node/app/plugins
+```
+
+**有** —— 记下箭头左边的宿主机路径，跳到下一节。
+**没有** —— 先补上这条映射：停止容器 → 编辑容器 → 存储空间/卷 里添加一条，宿主机随便挑个目录（建议就放在酒馆数据目录旁边，如 `/volume1/docker/sillytavern/plugins`），容器内路径填 `/home/node/app/plugins` → 保存并启动。群晖的 Container Manager、威联通的 Container Station 都在图形界面上做这一步。
+
+### 安装
+
+在宿主机上，对着那个**装着 `config/` 和 `data/` 的目录**运行安装脚本，它会自动认出这是 Docker 挂载目录：
+
+```bash
+bash <(curl -sL https://cdn.jsdelivr.net/gh/ZZZa-o/sillytavern-cloud-backup@main/install.sh) /volume1/docker/sillytavern
+```
+
+脚本结束时会把三个实际写入路径打印出来，照着核对一遍。然后**重启容器**。
+
+没装 git 的 NAS 可以手动来：把仓库下载解压成 `<宿主机plugins目录>/sillytavern-cloud-backup/`（里面要能看到 `package.json` 和 `server/index.js`），再编辑 `config/config.yaml` 加上 `enableServerPlugins: true`，重启容器。
+
+### 为什么之前在容器里跑脚本会"装成功但没效果"
+
+容器内的 `/home/node/app/config.yaml` 是一个指向 `config/config.yaml` 的**符号链接**。旧版脚本用 `sed -i` 改它，而 `sed -i` 的做法是"写临时文件再改名顶替"，结果符号链接本身被替换成了普通文件 —— 改动落在容器内部的临时层里，映射出来的 `config/config.yaml` 一个字都没变。容器一重启，`enableServerPlugins` 又回到 `false`。
+
+现在的脚本会先把符号链接解引用到真身再改，并且用重定向写入而不是改名，链接结构原样保留。
+
+### VPS
+
+VPS 上如果是 `git clone` 装的酒馆（不是 Docker），直接在酒馆目录里跑一键安装命令即可，和 Linux 桌面没有区别：
+
+```bash
+cd ~/SillyTavern
+bash <(curl -sL https://cdn.jsdelivr.net/gh/ZZZa-o/sillytavern-cloud-backup@main/install.sh)
+```
+
+VPS 上跑 Docker 的话，步骤和上面 NAS 完全一样。
 
 ## 首次使用
 
@@ -144,32 +201,50 @@ git clone https://github.com/ZZZa-o/sillytavern-webdav-chat-backup.git public/sc
 
 ## 备份范围怎么选
 
-点面板上的 **范围** 按钮，弹窗里是四个按钮：
+点面板上的 **范围** 按钮，弹窗里是六个按钮：
 
 | 按钮 | 点击行为 |
 | --- | --- |
 | **角色卡** | 进入二级菜单，勾选具体的角色卡 |
 | **聊天记录** | 直接开关。范围跟随你选的角色卡，不用单独选 |
 | **世界书** | 进入二级菜单，勾选具体的世界书 |
+| **预设** | 进入二级菜单，按目录展开勾具体的预设文件 |
+| **美化** | 进入二级菜单，按目录展开勾具体的主题；背景图是整类开关 |
 | **设置** | 直接开关。指 `settings.json` 一个文件 |
 
-**已选中的按钮外边框会加粗高亮**，按钮上还标着数量（如「角色卡（3）」「世界书（全部 5）」）。四个按钮下方有一行备注，写着当前完整的范围。
+**已选中的按钮外边框会加粗高亮**，按钮上还标着数量（如「角色卡（3）」「世界书（全部 5）」）。按钮下方有一行备注，写着当前完整的范围。
+
+预设与美化的二级菜单是文件夹形态：一个目录一块，标题上写着文件数与占用体积，点标题展开就能逐个勾。标题上的复选框是整目录开关。
+
+| 预设 | 对应目录 | 勾选粒度 |
+| --- | --- | --- |
+| OpenAI 预设 | `OpenAI Settings/` | 逐个文件 |
+| 快速回复 | `QuickReplies/` | 逐个文件 |
+
+| 美化 | 对应目录 | 勾选粒度 |
+| --- | --- | --- |
+| UI 主题 | `themes/` | 逐个文件 |
+| 背景图 | `backgrounds/` | 整类开关 |
+
+背景图不列明细 —— 都是图片，列出文件名没有参考价值。它只统计并备份**你自己上传的图**：酒馆首次创建用户目录时会把 `default/content/backgrounds/` 那二十来张自带风景图整份复制过来，插件按文件名认出它们并排除，标题旁边会写明排除了几张。换台机器装好酒馆，这些图本来就在。
 
 二级菜单里有：
 
-- **搜索框** —— 按角色名或世界书名过滤
+- **搜索框** —— 按角色名、世界书名或文件名过滤
 - **全选** / **取消全选** —— 搜索状态下只作用于筛选出来的那些
 - **仅当前角色**（只有角色卡菜单有）—— 一键只勾当前正在聊的那个角色
 
-把某一类全部勾上时，记录的是"全选"而不是当时的名单，所以**以后新导入的角色卡和世界书会自动纳入备份**。想固定名单就别用全选，手动勾选具体项。
+把某一类（或某个目录）全部勾上时，记录的是"全选"而不是当时的名单，所以**以后新导入的角色卡、新存的预设与主题会自动纳入备份**。想固定名单就别用全选，手动勾选具体项。
 
 几点需要知道的：
 
 - **聊天记录跟随角色卡**。只选了某一张卡，那就只备份这张卡的聊天。把角色卡全部取消，聊天记录也就没有范围了。
 - **群聊和群组不隶属任何角色卡**，只要「聊天记录」开着就整体带上，不受角色选择影响。
 - **世界书列表只列独立世界书**。已经链接到某张角色卡、并且那张卡的 png 里内嵌了世界书数据（`character_book`）的，不会出现在列表里 —— 它跟着角色卡一起备份，单独再传一份是重复的。菜单底部会写明隐藏了几本。
+  - 内嵌与否由服务端插件直接解析 png 判断，所以酒馆开着 `performance.lazyLoadCharacters` 也照样准。前端在这个模式下拿不到 `character_book`，只靠前端判会把内嵌的书全部误列出来。
   - 例外：如果一本世界书被角色卡引用、但卡里**没有**内嵌副本（只是个引用），它会留在列表里并标上「卡内无副本，建议勾选」。这种不单独备份的话，换台机器角色卡会指向一本不存在的世界书。
-- **设置默认不勾**。`settings.json` 里有 API 地址、模型选择等设备相关配置，从云端下载会覆盖本机这些配置。换设备迁移时才需要它。
+- **全新安装时六类一律不勾**。备份什么由你决定，插件不替你往网盘塞东西 —— 装好后第一件事就是进「范围」勾一遍。
+- **设置这一项要格外当心**。`settings.json` 里有 API 地址、模型选择等设备相关配置，从云端下载会覆盖本机这些配置。换设备迁移时才需要它。
 
 ## 上传与下载
 
@@ -187,12 +262,18 @@ git clone https://github.com/ZZZa-o/sillytavern-webdav-chat-backup.git public/sc
 
 大部分情况不用。下载完成后插件会自动把新内容刷进酒馆，和你手动导入时的效果一样：
 
-| 下载了什么 | 要不要刷新 |
-| --- | --- |
-| 角色卡 | 不用，角色列表自动刷新 |
-| 世界书 | 不用，世界书列表自动刷新 |
-| 聊天记录 | 不用，「管理聊天文件」是现读的 |
-| 设置（`settings.json`） | **要**，它在启动时就被读进内存并铺满整个界面，没有热加载的办法 |
+| 下载了什么 | 要不要刷新 | 走的什么入口 |
+| --- | --- | --- |
+| 角色卡 | 不用 | `getCharacters()`，顺带把列表排序切成「最近导入」 |
+| 世界书 | 不用 | `updateWorldInfoList()` |
+| 聊天记录 | 不用 | 「管理聊天文件」是现读的，落盘即可见 |
+| OpenAI 预设 | 不用 | `getSettings()` 重拉一次，酒馆据此重建预设下拉框 |
+| UI 主题 | 不用 | 同上 |
+| 背景图 | 不用 | `getBackgrounds()` |
+| 快速回复 | **要** | 列表由 QR 扩展自己读取，它没有留下重新加载的入口 |
+| 设置（`settings.json`） | **要** | 它在启动时就被读进内存并铺满整个界面 |
+
+`settings.json` 一并被覆盖时，预设与美化也不做热加载 —— 那份设置铺满整个界面，只热加载一半会得到一半新一半旧的状态，不如直接刷新页面干净。
 
 ## 云端文件管理
 
@@ -219,6 +300,12 @@ git clone https://github.com/ZZZa-o/sillytavern-webdav-chat-backup.git public/sc
 │  └─ _群组/<群组>.json
 ├─ 世界书/
 │  └─ <世界书名>.json
+├─ 预设/
+│  ├─ OpenAI Settings/<预设名>.json    第二层沿用酒馆的原目录名
+│  └─ QuickReplies/<快速回复集>.json
+├─ 美化/
+│  ├─ themes/<主题名>.json
+│  └─ backgrounds/<背景图>             只有你自己上传的，酒馆自带的不传
 ├─ 设置/
 │  └─ settings.json
 └─ .st-sync/
@@ -261,9 +348,9 @@ InfiniCLOUD、NAS、Nextcloud、ownCloud、Cloudreve 等服务只要提供标准
 
 ## 数据与安全
 
-- **全部配置（含 WebDAV 密码）保存在** `SillyTavern/data/<用户>/.webdav-chat-backup/config.json`。这个文件在酒馆的用户数据目录里，不在插件目录里，更新插件不会丢配置。
+- **全部配置（含 WebDAV 密码）保存在** `SillyTavern/data/<用户>/.sillytavern-cloud-backup/config.json`。这个文件在酒馆的用户数据目录里，不在插件目录里，更新插件不会丢配置。
 - 密码通过 `/config/load` 读取时**只返回"存没存"，不返回明文**。
-- 本机扫描缓存在 `.webdav-chat-backup/scan-cache.json`，只是加速用的哈希缓存，删掉不影响正确性。
+- 本机扫描缓存在 `.sillytavern-cloud-backup/scan-cache.json`，只是加速用的哈希缓存，删掉不影响正确性。
 - `secrets.json`（酒馆的 API key 存放处）**永远不进备份范围**。
 - 本插件不上传任何数据到除你自己填写的 WebDAV 地址之外的地方。
 
@@ -279,10 +366,10 @@ client/                    前端扩展
 ├─ index.js                入口：建面板、绑事件
 ├─ api.js                  后端调用
 ├─ tavern.js               读酒馆前端状态：角色名、世界书、哪些世界书已链接到角色卡
-├─ reload.js               下载后热刷新角色 / 世界书列表，免整页重载
+├─ reload.js               下载后热刷新各个列表，免整页重载
 ├─ settings.js             配置内存副本与范围判定
 ├─ panel.js                面板 HTML、状态栏与格式化
-├─ scope.js                备份范围弹窗（一级四类 → 二级多选）
+├─ scope.js                备份范围弹窗（一级六类 → 二级多选）
 ├─ cloud.js                云端文件管理
 ├─ actions.js              全部动作：保存、测试、预览、上传、下载、自动执行
 └─ style.css
@@ -292,35 +379,45 @@ server/                    服务端插件
 ├─ paths.js                本地路径 ↔ 云端路径映射，以及备份范围判定
 ├─ backup.js               上传 / 下载 / 预览
 ├─ cloud.js                云端文件管理：列举、指定下载、指定删除
+├─ cards.js                解析 png 取出内嵌世界书的名字（lazyload 下前端拿不到）
+├─ builtin.js              认出酒馆自带的内容（背景图），全选时跳过
 └─ webdav.js               WebDAV 通信原语（请求、PROPFIND、目录遍历）
 tools/
-└─ backup-logic-test.js    核心逻辑的单元测试
+├─ backup-logic-test.js    路径映射、范围判定、上传下载计划的单元测试
+└─ card-book-test.js       png 解析与内嵌世界书判定的单元测试
 ```
 
 一个仓库同时是前端扩展和服务端插件，所以两边都会 clone 整个仓库，各自只用到自己那半边。这样换来的是安装只需要一条命令。
 
 ### 后端接口
 
-全部是 `POST /api/plugins/webdav-chat-backup/<action>`：
+全部是 `POST /api/plugins/sillytavern-cloud-backup/<action>`：
 
 | 路由 | 用途 |
 | --- | --- |
-| `status` | 后端是否存活、是否已存密码、上次备份时间 |
+| `status` | 后端是否存活、是否已存密码、上次备份时间、预设与美化各目录的文件清单（含每个文件的体积） |
 | `config/load` / `config/save` | 读写配置。读取时密码只返回 `hasPassword` |
 | `test` | 连接测试：传一个测试文件再删掉 |
 | `backup/plan` | 预览，只比对不执行 |
 | `backup/upload` / `backup/download` | 执行备份 |
 | `cloud/list` / `cloud/download` / `cloud/delete` | 云端文件管理 |
+| `cards/embedded-worlds` | 哪些世界书已内嵌在角色卡里，前端据此把它们从列表里隐藏 |
 
-连接信息与范围都从 `config.json` 读，前端不随请求携带地址与密码。随请求带上的只有两样只有前端算得出来的东西：`characterNames`（`{ avatar 文件名: 角色名 }`，用来把云端文件存成看得懂的名字）和 `embeddedWorlds`（已内嵌在角色卡里的世界书，「全选」时要跳过）。
+连接信息与范围都从 `config.json` 读，前端不随请求携带地址与密码。随请求带上的只有 `characterNames`（`{ avatar 文件名: 角色名 }`），用来把云端文件存成看得懂的名字 —— png 里的角色叫什么只有酒馆前端知道。
+
+「哪些世界书已内嵌」曾经也由前端算好带上，现在改成后端自己解析 png：酒馆开了 `performance.lazyLoadCharacters` 后，前端拿到的角色数据里 `data.character_book` 被整个丢掉，怎么判都是"没内嵌"。
 
 ### 测试
 
 ```bash
 node tools/backup-logic-test.js
+node tools/card-book-test.js
 ```
 
-`server/paths.js` 与 `server/backup.js` 的纯函数部分只依赖 Node 内置模块，测试不需要 SillyTavern 的 `node_modules`。覆盖角色名映射与去重、云端四个文件夹的双向路径映射、范围判定（含聊天跟随角色卡）、越界防护、上传/下载计划生成。
+只依赖 Node 内置模块，不需要 SillyTavern 的 `node_modules`。
+
+- `backup-logic-test.js` 覆盖角色名映射与去重、云端六个文件夹的双向路径映射、范围判定（含聊天跟随角色卡、预设与美化按文件勾选、酒馆自带背景图被排除）、全新配置的默认值、目录文件清单、越界防护、上传/下载计划生成。
+- `card-book-test.js` 覆盖 png 的 tEXt 块解析、V2（`chara`）与 V3（`ccv3`）卡的内嵌世界书取名、无内嵌与损坏文件的处理。
 
 ## 常见问题
 
@@ -329,9 +426,10 @@ node tools/backup-logic-test.js
 按顺序检查：
 
 1. **重启过酒馆吗？** 服务端插件只在启动时加载一次，装完不重启一定是这个提示。
-2. `config.yaml` 里 `enableServerPlugins` 是不是 `true`。
-3. `SillyTavern/plugins/webdav-chat-backup/` 下有没有 `package.json` 和 `server/index.js`。
-4. 看酒馆启动日志里有没有 `Initializing plugin from ...webdav-chat-backup`，以及紧随其后的报错。
+2. `config.yaml` 里 `enableServerPlugins` 是不是 `true`。Docker 用户要确认改的是**映射出来的** `config/config.yaml`，容器内根目录那个是符号链接。
+3. `SillyTavern/plugins/sillytavern-cloud-backup/` 下有没有 `package.json` 和 `server/index.js`。
+4. **Docker 用户**：容器有没有把宿主机目录映射到 `/home/node/app/plugins`？没映射的话插件放在宿主机上酒馆也看不见。见 [Docker / NAS / VPS 安装](#docker--nas--vps-安装)。
+5. 看酒馆启动日志里有没有 `Initializing plugin from ...sillytavern-cloud-backup`，以及紧随其后的报错。
 
 ### 为什么需要服务端插件？能只装前端吗？
 

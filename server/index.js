@@ -6,6 +6,8 @@
  *   paths.js   本地路径 ↔ 远端路径映射，以及备份范围判定
  *   backup.js  上传 / 下载 / 预览
  *   cloud.js   云端文件管理：列举、指定下载、指定删除
+ *   cards.js   解析 png 取出内嵌世界书的名字
+ *   builtin.js 认出酒馆自带的内容（背景图），全选时跳过
  *   webdav.js  WebDAV 通信原语
  *
  * 连接信息与范围都从插件自己的 config.json 读，前端不再随请求携带地址与密码；
@@ -16,18 +18,20 @@ const paths = require('./paths.js');
 const webdav = require('./webdav.js');
 const backup = require('./backup.js');
 const cloud = require('./cloud.js');
+const cards = require('./cards.js');
+const builtin = require('./builtin.js');
 
 const info = {
-    id: 'webdav-chat-backup',
-    name: 'WebDAV Chat Backup',
-    description: 'Back up SillyTavern characters, chats, worlds, and settings to WebDAV.',
+    id: 'sillytavern-cloud-backup',
+    name: 'SillyTavern Cloud Backup',
+    description: 'Back up SillyTavern characters, chats, worlds, presets, themes, and settings to WebDAV.',
 };
 
 async function handle(response, fn) {
     try {
         response.json({ ok: true, ...(await fn()) });
     } catch (error) {
-        console.error('[WebDAV Chat Backup]', error);
+        console.error('[SillyTavern Cloud Backup]', error);
         response.status(500).json({ ok: false, error: error.message || String(error) });
     }
 }
@@ -39,19 +43,36 @@ function readNames(request) {
 }
 
 /**
- * 把「已内嵌在角色卡里的世界书」注入范围。
- * 这份名单只有前端算得出来（要读 png 里的 character_book），所以随请求带上，不进配置文件。
+ * 往范围里注入两份排除名单，「全选」时跳过它们：
+ *
+ *   世界书  已内嵌在角色卡里的那些 —— 跟着角色卡一起走，再单独传一份是重复。
+ *           名单由后端直接解析 png 得出，不走前端：酒馆开了 lazyLoadCharacters 之后
+ *           前端根本看不到 data.character_book（详见 cards.js）。
+ *   背景图  酒馆自带的那批风景图 —— 装好酒馆本来就有，传上网盘纯属占地方。
+ *
+ * 两份都只在 all 为真时生效，用户显式勾选的照传（详见 paths.inScope）。
  */
-function scopeFor(config, request) {
-    const raw = request.body?.embeddedWorlds;
-    const exclude = Array.isArray(raw) ? raw.map(String) : [];
-    return { ...config.scope, worlds: { ...config.scope.worlds, exclude } };
+async function scopeFor(config, directories) {
+    const exclude = [...await cards.embeddedBookNames(directories)];
+    const themes = {
+        ...config.scope.themes,
+        backgrounds: {
+            ...config.scope.themes.backgrounds,
+            exclude: [...builtin.builtinBackgrounds()],
+        },
+    };
+    return {
+        ...config.scope,
+        worlds: { ...config.scope.worlds, exclude },
+        themes,
+    };
 }
 
 /** 连接信息用配置里的，范围用注入过排除名单的。 */
-function configFor(request) {
-    const config = configStore.resolveConfig(request.user.directories);
-    return { ...config, scope: scopeFor(config, request) };
+async function configFor(request) {
+    const directories = request.user.directories;
+    const config = configStore.resolveConfig(directories);
+    return { ...config, scope: await scopeFor(config, directories) };
 }
 
 /** 云端文件管理的请求体统一是一组远端路径。 */
@@ -74,6 +95,8 @@ function init(router) {
             hasPassword: !!config.password,
             configured: !!config.url,
             lastBackupAt: state.lastBackupAt || config.lastBackupAt || '',
+            // 范围弹窗要用：预设与美化各有哪些目录、各有多少文件多大
+            scopeDirs: backup.scopeDirStats(request.user.directories),
         };
     }));
 
@@ -90,7 +113,7 @@ function init(router) {
     router.post('/test', (request, response) => handle(response, async () => {
         const config = configStore.resolveConfig(request.user.directories);
         await webdav.ensureRoot(config);
-        const marker = `.webdav-chat-backup-test-${Date.now()}.txt`;
+        const marker = `.sillytavern-cloud-backup-test-${Date.now()}.txt`;
         const body = Buffer.from(`SillyTavern WebDAV test ${new Date().toISOString()}\n`, 'utf8');
         await webdav.putBuffer(config, [marker], body, 'text/plain; charset=utf-8');
         try {
@@ -104,7 +127,7 @@ function init(router) {
     // ---- 备份 ----
 
     router.post('/backup/plan', (request, response) => handle(response, async () => {
-        const config = configFor(request);
+        const config = await configFor(request);
         return {
             plan: await backup.planOnly(request.user, config, readNames(request)),
             scopeText: paths.describeScope(config.scope),
@@ -112,15 +135,22 @@ function init(router) {
     }));
 
     router.post('/backup/upload', (request, response) => handle(response, async () => {
-        const result = await backup.runUpload(request.user, configFor(request), readNames(request));
+        const result = await backup.runUpload(request.user, await configFor(request), readNames(request));
         configStore.touchLastBackup(request.user.directories, result.lastBackupAt);
         return result;
     }));
 
     router.post('/backup/download', (request, response) => handle(response, async () => {
-        const result = await backup.runDownload(request.user, configFor(request), readNames(request));
+        const result = await backup.runDownload(request.user, await configFor(request), readNames(request));
         configStore.touchLastBackup(request.user.directories, result.lastBackupAt);
         return result;
+    }));
+
+    // ---- 角色卡 ----
+
+    // 前端拿这份名单把内嵌的世界书从「选择世界书」列表里隐藏掉
+    router.post('/cards/embedded-worlds', (request, response) => handle(response, async () => {
+        return { books: [...await cards.embeddedBookNames(request.user.directories)] };
     }));
 
     // ---- 云端文件管理 ----

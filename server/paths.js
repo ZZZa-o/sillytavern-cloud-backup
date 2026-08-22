@@ -2,12 +2,14 @@
  * 路径与范围：本地相对路径 ↔ 远端相对路径的双向映射，以及"这个文件在不在备份范围内"。
  *
  * 本地一侧沿用 SillyTavern 自己的目录名（characters / chats / worlds …），
- * 远端一侧换成四个中文文件夹，让网盘里一眼能看懂：
+ * 远端一侧换成六个中文文件夹，让网盘里一眼能看懂：
  *
  *   角色卡/<角色名>.png                ← 按角色名存，不是本地的 avatar 文件名
  *   聊天记录/<角色名>/<聊天文件>.jsonl   ← 目录名同样换成角色名
  *   聊天记录/_群聊/…  聊天记录/_群组/…
  *   世界书/<世界书名>.json             ← 只有独立世界书；内嵌在 png 里的跟着角色卡走
+ *   预设/OpenAI Settings/…             ← 第二层沿用酒馆的原目录名，往返映射无歧义
+ *   美化/themes/…
  *   设置/settings.json
  *
  * 角色名由前端随请求带上（酒馆前端才知道 png 里的角色叫什么），后端只负责去重与转义。
@@ -15,27 +17,60 @@
 const path = require('node:path');
 const crypto = require('node:crypto');
 
-// 本地顶层目录 → SillyTavern 的目录键
+// 本地顶层目录 → SillyTavern 的目录键。
+// group 决定这个目录归哪一类范围，label 是范围弹窗上显示的中文名，
+// detail 决定弹窗里要不要展开到具体文件 —— 背景图是图片，列明细没有意义，整类开关就够。
 const ROOTS = [
-    { prefix: 'characters', dirKey: 'characters' },
-    { prefix: 'chats', dirKey: 'chats' },
-    { prefix: 'group chats', dirKey: 'groupChats' },
-    { prefix: 'groups', dirKey: 'groups' },
-    { prefix: 'worlds', dirKey: 'worlds' },
+    { prefix: 'characters', dirKey: 'characters', group: 'characters' },
+    { prefix: 'chats', dirKey: 'chats', group: 'chats' },
+    { prefix: 'group chats', dirKey: 'groupChats', group: 'chats' },
+    { prefix: 'groups', dirKey: 'groups', group: 'chats' },
+    { prefix: 'worlds', dirKey: 'worlds', group: 'worlds' },
+
+    // 预设
+    { prefix: 'OpenAI Settings', dirKey: 'openAI_Settings', group: 'presets', label: 'OpenAI 预设', detail: true },
+    { prefix: 'QuickReplies', dirKey: 'quickreplies', group: 'presets', label: '快速回复', detail: true },
+
+    // 美化
+    { prefix: 'themes', dirKey: 'themes', group: 'themes', label: 'UI 主题', detail: true },
+    { prefix: 'backgrounds', dirKey: 'backgrounds', group: 'themes', label: '背景图', detail: false },
 ];
+
+const ROOT_BY_PREFIX = new Map(ROOTS.map(root => [root.prefix, root]));
+
+// 预设与美化：这两组按目录分别持有一份文件级选择集
+const DIR_GROUPS = ['presets', 'themes'];
+
+/** 某一类范围下有哪些目录，供前端渲染二级多选列表。 */
+function rootsOfGroup(group) {
+    return ROOTS.filter(root => root.group === group);
+}
+
+/** 预设/美化某个目录的选择集：scope.presets['openAI_Settings'] 这一层。 */
+function dirSelection(scope, group, dirKey) {
+    return scope?.[group]?.[dirKey];
+}
 
 const SETTINGS_FILE = 'settings.json';
 
-// 远端四个中文文件夹
+// 远端六个中文文件夹
 const REMOTE_CHARACTERS = '角色卡';
 const REMOTE_CHATS = '聊天记录';
 const REMOTE_WORLDS = '世界书';
+const REMOTE_PRESETS = '预设';
+const REMOTE_THEMES = '美化';
 const REMOTE_SETTINGS = '设置';
 // 群聊不隶属任何角色卡，收在聊天记录下面单开两层，前缀下划线避免与角色名撞车
 const REMOTE_GROUP_CHATS = '_群聊';
 const REMOTE_GROUPS = '_群组';
 
-const REMOTE_TOP = [REMOTE_CHARACTERS, REMOTE_CHATS, REMOTE_WORLDS, REMOTE_SETTINGS];
+const REMOTE_TOP = [REMOTE_CHARACTERS, REMOTE_CHATS, REMOTE_WORLDS, REMOTE_PRESETS, REMOTE_THEMES, REMOTE_SETTINGS];
+
+// 远端顶层文件夹 → 它下面第二层该出现哪一组目录
+const REMOTE_GROUP_TOPS = {
+    [REMOTE_PRESETS]: 'presets',
+    [REMOTE_THEMES]: 'themes',
+};
 
 // 只处理在 WebDAV / Windows 上真正非法的字符。空格与连字符必须保留，
 // 因为 SillyTavern 的聊天文件名形如 "2026-08-01 12h30m.jsonl"。
@@ -141,8 +176,17 @@ function toRemote(localRel, names) {
         case 'worlds':
             return [REMOTE_WORLDS, ...rest.map(safeSegment)].join('/');
 
-        default:
+        default: {
+            // 预设与美化：第二层原样用酒馆的目录名，反向查表就能还原，不必转义
+            const meta = ROOT_BY_PREFIX.get(root);
+            if (meta?.group === 'presets') {
+                return [REMOTE_PRESETS, meta.prefix, ...rest.map(safeSegment)].join('/');
+            }
+            if (meta?.group === 'themes') {
+                return [REMOTE_THEMES, meta.prefix, ...rest.map(safeSegment)].join('/');
+            }
             return null;
+        }
     }
 }
 
@@ -192,8 +236,15 @@ function toLocal(remoteRel, names) {
         case REMOTE_WORLDS:
             return ['worlds', ...rest].join('/');
 
-        default:
-            return null;
+        default: {
+            // 预设与美化。第二层必须是这一组里认识的目录名 ——
+            // 白名单本身就挡住了 ../ 之类想穿出数据目录的路径
+            const group = REMOTE_GROUP_TOPS[top];
+            if (!group || rest.length < 2) return null;
+            const meta = ROOT_BY_PREFIX.get(rest[0]);
+            if (!meta || meta.group !== group) return null;
+            return [meta.prefix, ...rest.slice(1)].join('/');
+        }
     }
 }
 
@@ -256,8 +307,19 @@ function inScope(localRel, scope) {
             return selectionHas(scope.worlds, name);
         }
 
-        default:
-            return false;
+        default: {
+            // 预设与美化：每个目录各持一份文件级选择集，按目录内相对路径判定
+            const meta = ROOT_BY_PREFIX.get(root);
+            if (!meta || !DIR_GROUPS.includes(meta.group)) return false;
+            const selection = dirSelection(scope, meta.group, meta.dirKey);
+            const file = rest.join('/');
+            // 与世界书同理：整目录全选时跳过酒馆自带的那些（目前只有背景图有排除名单），
+            // 用户显式勾了的照传。
+            if (selection?.all && Array.isArray(selection.exclude) && selection.exclude.includes(file)) {
+                return false;
+            }
+            return selectionHas(selection, file);
+        }
     }
 }
 
@@ -275,7 +337,7 @@ function categoryOf(localRel) {
         case 'chats':
         case 'group chats':
         case 'groups': return 'chats';
-        default: return 'other';
+        default: return ROOT_BY_PREFIX.get(parts[0])?.group || 'other';
     }
 }
 
@@ -289,9 +351,12 @@ function scanRoots(directories, scope) {
         const dir = directories[root.dirKey];
         if (!dir) continue;
         if (root.prefix === 'characters' && !charactersOn) continue;
+        // 单人聊天的目录名就是角色卡文件名，没选角色卡就无从跟随
         if (root.prefix === 'chats' && !(chatsOn && charactersOn)) continue;
         if ((root.prefix === 'group chats' || root.prefix === 'groups') && !chatsOn) continue;
         if (root.prefix === 'worlds' && selectionEmpty(scope.worlds)) continue;
+        if (DIR_GROUPS.includes(root.group)
+            && selectionEmpty(dirSelection(scope, root.group, root.dirKey))) continue;
         roots.push({ prefix: root.prefix, dir });
     }
     return roots;
@@ -317,6 +382,20 @@ function localAbsPath(directories, localRel) {
     return target;
 }
 
+/** 预设/美化某一组的文案片段："OpenAI 预设 全部、UI 主题 3 个"。 */
+function describeDirGroup(scope, group) {
+    const parts = [];
+    for (const root of rootsOfGroup(group)) {
+        const selection = dirSelection(scope, group, root.dirKey);
+        if (selectionEmpty(selection)) continue;
+        // 背景图没有明细可选，只是个整类开关，说"全部"反而让人以为还有别的粒度
+        if (!root.detail) parts.push(root.label);
+        else if (selection.all) parts.push(`${root.label} 全部`);
+        else parts.push(`${root.label} ${selection.selected.length} 个`);
+    }
+    return parts;
+}
+
 /** "当前已选择同步范围：xxx" 里的那段 xxx。 */
 function describeScope(scope) {
     const parts = [];
@@ -328,6 +407,9 @@ function describeScope(scope) {
     if (scope.worlds?.all) parts.push('世界书 全部');
     else if (scope.worlds?.selected?.length) parts.push(`世界书 ${scope.worlds.selected.length} 本`);
 
+    parts.push(...describeDirGroup(scope, 'presets'));
+    parts.push(...describeDirGroup(scope, 'themes'));
+
     if (scope.settings?.enabled) parts.push('设置');
 
     return parts.length ? parts.join('、') : '未选择任何内容';
@@ -338,10 +420,16 @@ module.exports = {
     REMOTE_CHARACTERS,
     REMOTE_CHATS,
     REMOTE_WORLDS,
+    REMOTE_PRESETS,
+    REMOTE_THEMES,
     REMOTE_SETTINGS,
     REMOTE_GROUP_CHATS,
     REMOTE_GROUPS,
     REMOTE_TOP,
+    ROOTS,
+    DIR_GROUPS,
+    rootsOfGroup,
+    dirSelection,
     safeSegment,
     stemOf,
     buildNameIndex,

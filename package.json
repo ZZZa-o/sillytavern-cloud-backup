@@ -1,15 +1,15 @@
 {
-    "name": "sillytavern-webdav-chat-backup",
-    "version": "2.0.0",
-    "description": "Back up SillyTavern characters, chats, worlds, and settings to WebDAV.",
+    "name": "sillytavern-cloud-backup",
+    "version": "3.0.0",
+    "description": "Back up SillyTavern characters, chats, worlds, presets, themes, and settings to WebDAV.",
     "type": "commonjs",
     "main": "server/index.js",
-    "homepage": "https://github.com/ZZZa-o/sillytavern-webdav-chat-backup",
+    "homepage": "https://github.com/ZZZa-o/sillytavern-cloud-backup",
     "repository": {
         "type": "git",
-        "url": "https://github.com/ZZZa-o/sillytavern-webdav-chat-backup.git"
+        "url": "https://github.com/ZZZa-o/sillytavern-cloud-backup.git"
     },
     "scripts": {
-        "test": "node tools/backup-logic-test.js"
+        "test": "node tools/backup-logic-test.js && node tools/card-book-test.js"
     }
 }
