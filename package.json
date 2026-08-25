@@ -10,6 +10,6 @@
         "url": "https://github.com/ZZZa-o/sillytavern-cloud-backup.git"
     },
     "scripts": {
-        "test": "node tools/backup-logic-test.js && node tools/card-book-test.js"
+        "test": "node tools/backup-logic-test.js && node tools/synthetic-test.js && node tools/card-book-test.js"
     }
 }

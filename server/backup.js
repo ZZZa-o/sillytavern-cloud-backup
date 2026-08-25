@@ -15,6 +15,7 @@ const crypto = require('node:crypto');
 const webdav = require('./webdav.js');
 const paths = require('./paths.js');
 const builtin = require('./builtin.js');
+const synthetic = require('./synthetic.js');
 
 // ---------------------------------------------------------------------------
 // 通用小工具
@@ -50,8 +51,15 @@ async function scanLocal(directories, scope, hashCache = {}) {
     for (const root of paths.scanRoots(directories, scope)) {
         await walkLocal(root.dir, root.prefix, out, hashCache, scope);
     }
-    if (scope.settings?.enabled) {
-        await addLocalFile(path.join(directories.root, paths.SETTINGS_FILE), paths.SETTINGS_FILE, out, hashCache);
+    // 合成文件每次都从 settings.json / secrets.json 现拼一遍再算哈希：
+    // 源数据一改哈希就变，下次备份必然识别为需要更新。
+    // 不套 mtime 缓存是因为那样两头都不准 —— 酒馆频繁改写 settings.json，
+    // mtime 变了不代表人设变了；反过来也一样。反正只有几 KB，现算最可靠。
+    for (const group of ['personas', 'apiProfiles']) {
+        const file = synthetic.fileOfGroup(group);
+        if (!file || !paths.inScope(file, scope)) continue;
+        const buffer = synthetic.build(file, directories, scope);
+        out[file] = { hash: sha256(buffer), size: buffer.length, mtime: '' };
     }
     return out;
 }
@@ -298,10 +306,15 @@ function newResult() {
         skipped: 0,
         errors: [],
         // 下载动了哪几类，前端据此热刷新对应列表，免得让用户整页重载
-        touched: { characters: 0, chats: 0, worlds: 0, presets: 0, themes: 0, settings: 0, other: 0 },
+        touched: {
+            characters: 0, chats: 0, worlds: 0, personas: 0,
+            presets: 0, themes: 0, apiProfiles: 0, other: 0,
+        },
         // 动过的顶层目录名。热刷新的粒度有时细于类别 ——
         // 比如「美化」里 backgrounds 要单独调一次背景列表接口，QuickReplies 则根本没有热加载入口。
         touchedDirs: [],
+        // 人设热加载要用：合并后的 power_user 三件套，前端直接写进内存就能看到
+        personaData: null,
     };
 }
 
@@ -327,12 +340,16 @@ async function runUpload(user, config, names) {
     try {
         for (const item of plan.upload) {
             try {
+                const isSynthetic = synthetic.isSynthetic(item.path);
                 const absPath = paths.localAbsPath(directories, item.path);
                 if (!absPath || !fs.existsSync(absPath)) continue;
                 const remoteRel = paths.toRemote(item.path, names);
                 if (!remoteRel) continue;
 
-                const buffer = await fs.promises.readFile(absPath);
+                // 合成文件现拼出来，磁盘上没有它对应的文件
+                const buffer = isSynthetic
+                    ? synthetic.build(item.path, directories, config.scope)
+                    : await fs.promises.readFile(absPath);
                 const segments = remoteRel.split('/');
                 await webdav.ensureDir(config, segments.slice(0, -1), createdDirs);
                 await webdav.putBuffer(config, segments, buffer);
@@ -345,7 +362,10 @@ async function runUpload(user, config, names) {
                     device,
                     at: new Date().toISOString(),
                 };
-                cache[item.path] = { hash, size: buffer.length, mtime: statMtime(absPath) };
+                // 合成文件没有稳定的 mtime 可比，不进哈希缓存
+                if (!isSynthetic) {
+                    cache[item.path] = { hash, size: buffer.length, mtime: statMtime(absPath) };
+                }
                 result.uploaded++;
             } catch (error) {
                 result.errors.push({ path: item.path, action: 'upload', error: error.message });
@@ -374,16 +394,37 @@ async function runDownload(user, config, names) {
             const remoteRel = context.remoteIndex[item.path]?.remote || paths.toRemote(item.path, names);
             if (!remoteRel) throw new Error('无法定位云端路径');
             const buffer = await webdav.getBuffer(config, remoteRel.split('/'));
-            const absPath = await writeLocal(directories, item.path, buffer);
-            cache[item.path] = { hash: sha256(buffer), size: buffer.length, mtime: statMtime(absPath) };
+            const absPath = await applyDownloaded(directories, item.path, buffer, result);
+            // 合成文件没有稳定的 mtime 可比，不进哈希缓存
+            if (!synthetic.isSynthetic(item.path)) {
+                cache[item.path] = { hash: sha256(buffer), size: buffer.length, mtime: statMtime(absPath) };
+            }
             result.downloaded++;
-            noteTouched(result, item.path);
         } catch (error) {
             result.errors.push({ path: item.path, action: 'download', error: error.message });
         }
     }
 
     return finish(directories, device, cache, result, 'download');
+}
+
+/**
+ * 把下载到的一个文件落地，并记一笔它属于哪一类。
+ * 合成文件走各自的合并（只改 settings.json 里那几个字段），其余直接写盘。
+ * 「从云端下载」与「云端文件 → 下载选中」两条路都走这里，行为必须一致。
+ */
+async function applyDownloaded(directories, localRel, buffer, result) {
+    let absPath;
+    if (synthetic.isSynthetic(localRel)) {
+        const merged = synthetic.merge(localRel, directories, buffer);
+        // 人设能热加载，把合并后的结果带回前端，省得让用户刷新页面
+        if (localRel === synthetic.PERSONAS_FILE) result.personaData = merged.data;
+        absPath = merged.absPath;
+    } else {
+        absPath = await writeLocal(directories, localRel, buffer);
+    }
+    noteTouched(result, localRel);
+    return absPath;
 }
 
 /** 写本地文件，同名直接覆盖 —— 酒馆本来就允许存在同名角色卡，不需要另存副本。 */
@@ -410,6 +451,60 @@ function finish(directories, device, cache, result, direction) {
 /** 只比对不执行。 */
 async function planOnly(user, config, names) {
     return summarizePlan(buildPlan(await collectContext(user, config, names)));
+}
+
+// ---------------------------------------------------------------------------
+// 聊天清单：范围弹窗里每张角色卡是一个文件夹，展开就能勾具体某一条聊天
+// ---------------------------------------------------------------------------
+
+/**
+ * 每个角色目录下有几条聊天、多大。键是角色目录名（角色卡文件名去扩展名）。
+ *
+ * 只 readdir 不读文件内容，几百个角色也就是几百次目录读取。
+ * 明细不在这里给 —— 角色多起来一次性回传能到几百 KB，改由 chatEntries 按需拿。
+ */
+function chatCounts(directories) {
+    const out = {};
+    const base = directories.chats;
+    if (!base || !fs.existsSync(base)) return out;
+
+    let dirents;
+    try {
+        dirents = fs.readdirSync(base, { withFileTypes: true });
+    } catch {
+        return out;
+    }
+
+    for (const dirent of dirents) {
+        if (!dirent.isDirectory() || dirent.name.startsWith('.')) continue;
+        const files = listDirFiles(path.join(base, dirent.name));
+        out[dirent.name] = {
+            files: files.length,
+            bytes: files.reduce((sum, item) => sum + item.bytes, 0),
+        };
+    }
+    return out;
+}
+
+/**
+ * 某个角色的聊天文件明细。value 是 `<角色目录名>/<聊天文件>`，
+ * 与范围里 scope.chats.selected 存的形式一致，前端拿到就能直接比对勾选态。
+ */
+function chatEntries(directories, stem) {
+    const clean = String(stem || '').trim();
+    // 目录名来自角色卡文件名，正常不含分隔符；挡一下手工构造的请求
+    if (!clean || clean.includes('/') || clean.includes('\\') || clean.includes('..')) return [];
+
+    const dir = path.join(directories.chats || '', clean);
+    return listDirFiles(dir)
+        .map(item => ({
+            value: `${clean}/${item.rel}`,
+            label: item.rel.replace(/\.jsonl$/i, ''),
+            bytes: item.bytes,
+            modified: statMtime(path.join(dir, item.rel)),
+        }))
+        // 新的排在前面 —— 跨设备接续聊天时找的永远是最近那条
+        .sort((a, b) => (Date.parse(b.modified) || 0) - (Date.parse(a.modified) || 0));
 }
 
 // ---------------------------------------------------------------------------
@@ -501,8 +596,11 @@ module.exports = {
     collectContext,
     planOnly,
     scopeDirStats,
+    chatCounts,
+    chatEntries,
     runUpload,
     runDownload,
+    applyDownloaded,
     writeLocal,
     // 纯函数，供单元测试
     buildPlan,

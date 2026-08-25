@@ -1,6 +1,6 @@
 /** 全部动作：保存配置、测试连接、预览、上传、下载、自动执行。 */
 import { api, apiWithNames } from './api.js';
-import { getConfig, loadConfig, pushConfig, describeScope, setScopeDirs } from './settings.js';
+import { getConfig, loadConfig, pushConfig, describeScope, setScopeDirs, setChatCounts, setSynthLists } from './settings.js';
 import {
     escHtml,
     setStatus, notify, setReport, withBusy, isBusy,
@@ -22,6 +22,8 @@ export async function checkHelper() {
         renderPasswordState(!!data.hasPassword);
         renderLastBackup(data.lastBackupAt);
         setScopeDirs(data.scopeDirs);
+        setChatCounts(data.chatCounts);
+        setSynthLists(data);
         return true;
     } catch (error) {
         $('#stcb-helper-status').removeClass('is-muted is-ok').addClass('is-error').text('后端未加载');
@@ -80,8 +82,9 @@ export async function testConnection() {
 
 /** 范围弹窗点了确定就立刻落盘，免得用户以为选完就生效、结果没保存。 */
 export async function editScope() {
-    // 弹窗要按最新名单决定哪些世界书该隐藏，这里必须等
-    await refreshEmbeddedBooks();
+    // 弹窗要按最新数据渲染：内嵌世界书名单决定哪些世界书该隐藏，
+    // status 里的目录清单与每张卡的聊天条数决定文件夹标题上写什么
+    await Promise.all([refreshEmbeddedBooks(), checkHelper()]);
     const confirmed = await openScopePopup();
     if (!confirmed) return;
     await withBusy('正在保存备份范围...', async () => {
@@ -202,7 +205,7 @@ export async function runDownload() {
         renderResult(data, `下载完成 · 范围：${describeScope()}`);
 
         // 角色卡与世界书直接热刷进酒馆，跟手动导入一样，不用重载页面
-        const needsReload = await reloadTouched(data.touched);
+        const needsReload = await reloadTouched(data);
 
         const summary = data.downloaded ? `下载 ${data.downloaded} 个文件` : '本机已是最新';
         if (data.errors?.length) {

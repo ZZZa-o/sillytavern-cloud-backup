@@ -12,11 +12,12 @@ export const DEFAULT_CONFIG = {
     // 六类一律不勾：备份什么由用户自己去「范围」里决定
     scope: {
         characters: { all: false, selected: [] },
-        chats: { enabled: false },
-        worlds: { all: false, selected: [] },
+        chats: { all: false, selected: [], skip: [] },
+        personas: { all: false, selected: [] },
         presets: {},
         themes: {},
-        settings: { enabled: false },
+        worlds: { all: false, selected: [] },
+        apiProfiles: { all: false, selected: [] },
     },
     auto: { enabled: false, onChatEvents: true, intervalHours: 6 },
     hasPassword: false,
@@ -43,6 +44,37 @@ export function setScopeDirs(incoming) {
 
 export function getScopeDirs(group) {
     return scopeDirs[group] || [];
+}
+
+/**
+ * 每个角色目录下有几条聊天、多大。键是角色目录名（角色卡文件名去扩展名）。
+ * 由 /status 一并送来，用于角色卡文件夹标题上的「N 条聊天」。
+ */
+let chatCounts = {};
+
+export function setChatCounts(incoming) {
+    chatCounts = incoming && typeof incoming === 'object' ? incoming : {};
+}
+
+export function getChatCount(stem) {
+    return chatCounts[stem] || { files: 0, bytes: 0 };
+}
+
+/**
+ * 人设与 API 连接配置的可选项，同样由 /status 送来。
+ * 这两样都长在 settings.json 里，前端读不到，只能问后端。
+ */
+let synthLists = { personas: [], apiProfiles: [] };
+
+export function setSynthLists(incoming = {}) {
+    synthLists = {
+        personas: Array.isArray(incoming.personas) ? incoming.personas : [],
+        apiProfiles: Array.isArray(incoming.apiProfiles) ? incoming.apiProfiles : [],
+    };
+}
+
+export function getSynthList(group) {
+    return synthLists[group] || [];
 }
 
 /** 某个目录的选择集，配置里还没有这一项时给个空的（不会写回配置）。 */
@@ -80,11 +112,12 @@ export function applyConfig(incoming = {}) {
         remotePath: incoming.remotePath || base.remotePath,
         scope: {
             characters: readSelection(scope.characters, base.scope.characters),
-            chats: { enabled: scope.chats?.enabled === true },
-            worlds: readSelection(scope.worlds, base.scope.worlds),
+            chats: readChats(scope.chats, base.scope.chats),
+            personas: readSelection(scope.personas, base.scope.personas),
             presets: readDirGroup(scope.presets),
             themes: readDirGroup(scope.themes),
-            settings: { enabled: scope.settings?.enabled === true },
+            worlds: readSelection(scope.worlds, base.scope.worlds),
+            apiProfiles: readSelection(scope.apiProfiles, base.scope.apiProfiles),
         },
         auto: {
             enabled: auto.enabled === true,
@@ -102,6 +135,17 @@ function readSelection(raw, fallback) {
     return {
         all: raw.all === true,
         selected: Array.isArray(raw.selected) ? raw.selected.map(String) : [],
+    };
+}
+
+/**
+ * 聊天记录比别处多一个 skip：全选态下用户单独取消掉的那几条。
+ * 明细是展开某张卡时才按需加载的，前端手上没有全集可写进 selected，只能记排除。
+ */
+function readChats(raw, fallback) {
+    return {
+        ...readSelection(raw, fallback),
+        skip: Array.isArray(raw?.skip) ? raw.skip.map(String) : [],
     };
 }
 
@@ -166,11 +210,12 @@ function dirGroupEnabled(scope, group) {
 export function scopeEnabled(scope = getConfig().scope) {
     return {
         characters: !selectionEmpty(scope.characters) && characterEntries().length > 0,
-        chats: scope.chats?.enabled === true,
-        worlds: !selectionEmpty(scope.worlds) && worldEntries().length > 0,
+        chats: !selectionEmpty(scope.chats),
+        personas: !selectionEmpty(scope.personas) && getSynthList('personas').length > 0,
         presets: dirGroupEnabled(scope, 'presets'),
         themes: dirGroupEnabled(scope, 'themes'),
-        settings: scope.settings?.enabled === true,
+        worlds: !selectionEmpty(scope.worlds) && worldEntries().length > 0,
+        apiProfiles: !selectionEmpty(scope.apiProfiles) && getSynthList('apiProfiles').length > 0,
     };
 }
 
@@ -197,7 +242,24 @@ export function describeScope(scope = getConfig().scope) {
     if (scope.characters?.all && charTotal) parts.push(`角色卡 全部 ${charTotal} 张`);
     else if (scope.characters?.selected?.length) parts.push(`角色卡 ${scope.characters.selected.length} 张`);
 
-    if (scope.chats?.enabled) parts.push('聊天记录');
+    // 聊天必须跟着角色卡走，一张卡都没勾时说"聊天记录 全部"是在骗人 —— 实际一条都不会传
+    if (!selectionEmpty(scope.characters) && charTotal) {
+        if (scope.chats?.all) {
+            const skipped = scope.chats.skip?.length || 0;
+            parts.push(skipped ? `聊天记录 全部（排除 ${skipped} 条）` : '聊天记录 全部');
+        } else if (scope.chats?.selected?.length) {
+            parts.push(`聊天记录 ${scope.chats.selected.length} 条`);
+        }
+    }
+
+    const personaTotal = getSynthList('personas').length;
+    if (personaTotal) {
+        if (scope.personas?.all) parts.push(`用户人设 全部 ${personaTotal} 个`);
+        else if (scope.personas?.selected?.length) parts.push(`用户人设 ${scope.personas.selected.length} 个`);
+    }
+
+    parts.push(...describeDirGroup(scope, 'presets'));
+    parts.push(...describeDirGroup(scope, 'themes'));
 
     // 独立世界书为 0 时干脆不提，说"世界书 全部"只会让人以为传了什么
     const worldTotal = worldEntries().length;
@@ -206,10 +268,8 @@ export function describeScope(scope = getConfig().scope) {
         else if (scope.worlds?.selected?.length) parts.push(`世界书 ${scope.worlds.selected.length} 本`);
     }
 
-    parts.push(...describeDirGroup(scope, 'presets'));
-    parts.push(...describeDirGroup(scope, 'themes'));
-
-    if (scope.settings?.enabled) parts.push('设置');
+    if (scope.apiProfiles?.all) parts.push(`API 配置 全部 ${getSynthList('apiProfiles').length} 个`);
+    else if (scope.apiProfiles?.selected?.length) parts.push(`API 配置 ${scope.apiProfiles.selected.length} 个`);
 
     return parts.length ? parts.join('、') : '未选择任何内容';
 }

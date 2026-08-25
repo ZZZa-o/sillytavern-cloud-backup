@@ -383,6 +383,31 @@
     overflow-wrap: anywhere;
 }
 
+/* 角色卡分组标题右端的联动开关：开着时勾一张卡会连它的聊天一起勾上。
+   开与关必须一眼分得出来，所以不只换图标，颜色也跟着变。 */
+.stcb-cloud-link {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 18px;
+    padding: 0;
+    border: 1px solid var(--stcb-border);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--stcb-muted);
+    cursor: pointer;
+    font-size: 10.5px;
+    line-height: 1;
+}
+
+.stcb-cloud-link.is-on {
+    border-color: color-mix(in srgb, var(--stcb-accent) 65%, transparent);
+    background: color-mix(in srgb, var(--stcb-accent) 16%, transparent);
+    color: color-mix(in srgb, var(--stcb-accent) 88%, var(--SmartThemeBodyColor));
+}
+
 .stcb-cloud-item small {
     flex: 0 0 auto;
     color: var(--stcb-muted);
@@ -511,6 +536,14 @@
     padding: 4px 3px;
     font-size: 11.5px;
     color: var(--stcb-muted);
+}
+
+/* 「含聊天记录」这类开关按钮：开着时颜色加深，和旁边的一次性动作按钮区分开 */
+.stcb-scope-popup .stcb-scope-toggle.is-on {
+    border-color: color-mix(in srgb, var(--stcb-accent) 70%, transparent);
+    background: color-mix(in srgb, var(--stcb-accent) 18%, transparent);
+    color: color-mix(in srgb, var(--stcb-accent) 88%, var(--SmartThemeBodyColor));
+    font-weight: 700;
 }
 
 /* 预设与美化的文件夹视图：一个目录一块，展开逐个勾文件。

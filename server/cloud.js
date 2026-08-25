@@ -15,10 +15,11 @@ const paths = require('./paths.js');
 const GROUPS = {
     [paths.REMOTE_CHARACTERS]: '角色卡',
     [paths.REMOTE_CHATS]: '聊天记录',
-    [paths.REMOTE_WORLDS]: '世界书',
+    [paths.REMOTE_PERSONAS]: '用户人设',
     [paths.REMOTE_PRESETS]: '预设',
     [paths.REMOTE_THEMES]: '美化',
-    [paths.REMOTE_SETTINGS]: '设置',
+    [paths.REMOTE_WORLDS]: '世界书',
+    [paths.REMOTE_API]: 'API 配置',
 };
 
 function classify(remoteRel) {
@@ -79,7 +80,12 @@ async function download(user, config, names, remotePaths) {
         written: [],
         fallbackDir: '',
         // 与 backup.js 同义：下载动了哪几类、动过哪些顶层目录
-        touched: { characters: 0, chats: 0, worlds: 0, presets: 0, themes: 0, settings: 0, other: 0 },
+        touched: {
+            characters: 0, chats: 0, worlds: 0, personas: 0,
+            presets: 0, themes: 0, apiProfiles: 0, other: 0,
+        },
+        // 人设热加载要用，与 backup.js 的下载结果同义
+        personaData: null,
         touchedDirs: [],
     };
 
@@ -91,9 +97,8 @@ async function download(user, config, names, remotePaths) {
             const localRel = fromIndex[remoteRel] || paths.toLocal(remoteRel, names);
 
             if (localRel && paths.localAbsPath(directories, localRel)) {
-                await backup.writeLocal(directories, localRel, buffer);
+                await backup.applyDownloaded(directories, localRel, buffer, result);
                 result.written.push({ remote: remoteRel, target: localRel });
-                backup.noteTouched(result, localRel);
             } else {
                 const target = path.join(fallbackRoot, ...remoteRel.split('/'));
                 await fs.promises.mkdir(path.dirname(target), { recursive: true });

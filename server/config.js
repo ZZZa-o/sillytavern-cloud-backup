@@ -6,11 +6,13 @@
  *
  * 范围模型有六类，与面板上的六个按钮一一对应：
  *   角色卡    按 avatar 文件名选，可全选
- *   聊天记录  开关，范围跟随角色卡的选择（不单独选）
- *   世界书    按名字选，可全选
+ *   聊天记录  按 <角色目录名>/<聊天文件> 逐条选；all 表示「已选角色的全部聊天」。
+ *             没有独立的一级按钮 —— 它长在角色卡二级页面里，跟着角色卡走
+ *   用户人设  按头像文件名选。人设的名字与描述在 settings.json 里，走合成文件
  *   预设      按目录分别持有一份文件级选择集（OpenAI Settings / QuickReplies）
  *   美化      同上（themes 逐个主题勾；backgrounds 只有整类开关）
- *   设置      开关，只有 settings.json 一个文件
+ *   世界书    按名字选，可全选
+ *   API 配置  按连接配置档的 id 选，同样是合成文件（含明文密钥）
  */
 const fs = require('node:fs');
 const path = require('node:path');
@@ -45,11 +47,12 @@ function defaultConfig() {
         remotePath: DEFAULT_REMOTE_PATH,
         scope: {
             characters: { all: false, selected: [] },
-            chats: { enabled: false },
-            worlds: { all: false, selected: [] },
+            chats: { all: false, selected: [], skip: [] },
+            personas: { all: false, selected: [] },
             presets: emptyDirGroup('presets'),
             themes: emptyDirGroup('themes'),
-            settings: { enabled: false },
+            worlds: { all: false, selected: [] },
+            apiProfiles: { all: false, selected: [] },
         },
         auto: { enabled: false, onChatEvents: true, intervalHours: 6 },
         lastBackupAt: '',
@@ -69,6 +72,15 @@ function toStringArray(value) {
 function readSelection(raw, fallback) {
     if (!raw || typeof raw !== 'object') return { all: fallback.all, selected: [...fallback.selected] };
     return { all: raw.all === true, selected: toStringArray(raw.selected) };
+}
+
+/**
+ * 聊天记录比别处多一个 skip：全选态下用户单独取消掉的那几条。
+ * 用排除而不是把全集写进 selected —— 明细是展开某张卡时才按需加载的，
+ * 前端手上根本没有全集可写。
+ */
+function readChats(raw, fallback) {
+    return { ...readSelection(raw, fallback), skip: toStringArray(raw?.skip) };
 }
 
 /** 预设/美化：只认 ROOTS 里定义的目录键，配置里多出来的一律丢弃。 */
@@ -97,11 +109,12 @@ function mergeConfig(base, stored) {
         remotePath: String(stored?.remotePath ?? base.remotePath).trim() || DEFAULT_REMOTE_PATH,
         scope: {
             characters: readSelection(scope.characters, base.scope.characters),
-            chats: { enabled: scope.chats?.enabled === true },
-            worlds: readSelection(scope.worlds, base.scope.worlds),
+            chats: readChats(scope.chats, base.scope.chats),
+            personas: readSelection(scope.personas, base.scope.personas),
             presets: readDirGroup(scope.presets, base.scope.presets, 'presets'),
             themes: readDirGroup(scope.themes, base.scope.themes, 'themes'),
-            settings: { enabled: scope.settings?.enabled === true },
+            worlds: readSelection(scope.worlds, base.scope.worlds),
+            apiProfiles: readSelection(scope.apiProfiles, base.scope.apiProfiles),
         },
         auto: {
             enabled: auto.enabled === true,

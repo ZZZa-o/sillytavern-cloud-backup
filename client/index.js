@@ -18,7 +18,10 @@ import {
     previewBackup, runUpload, runDownload,
     autoMaybeRun, autoQueue, autoTimer,
 } from './actions.js';
-import { refreshCloud, downloadSelected, deleteSelected, renderCloud, toggleItem, toggleGroup, noteToggle } from './cloud.js';
+import {
+    refreshCloud, downloadSelected, deleteSelected, renderCloud,
+    toggleItem, toggleGroup, noteToggle, toggleSort, toggleLink, filterByCurrentCharacter,
+} from './cloud.js';
 import { ensureRecentSortOption } from './reload.js';
 
 const AUTO_INPUTS = ['#stcb-auto-enabled', '#stcb-auto-events', '#stcb-auto-hours'].join(', ');
@@ -48,12 +51,25 @@ function bindEvents() {
     on('stcb-cloud-refresh', () => refreshCloud(true));
     on('stcb-cloud-download', downloadSelected);
     on('stcb-cloud-delete', deleteSelected);
+    on('stcb-cloud-sort', function () {
+        const mode = toggleSort();
+        $(this).find('span').text(mode === 'time' ? '按时间' : '按路径');
+        $(this).find('i').attr('class',
+            `fa-solid ${mode === 'time' ? 'fa-clock-rotate-left' : 'fa-arrow-down-short-wide'}`);
+    });
+    on('stcb-cloud-current', filterByCurrentCharacter);
 
     $('#stcb-cloud-search').on('input', renderCloud);
     $('#stcb-cloud-list').on('change', 'input[type="checkbox"]', function () {
         const group = this.dataset.group;
         if (group) toggleGroup(group, this.checked);
         else toggleItem(this.value, this.checked);
+    });
+    // 联动开关长在分组标题里，点它不该顺带把 details 展开或收起
+    $('#stcb-cloud-list').on('click', 'button[data-act="link"]', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleLink();
     });
     // details 的展开状态得自己记，重渲染会把 DOM 整个换掉。
     // toggle 事件不冒泡，jQuery 的事件委托接不到，只能用捕获阶段。

@@ -39,7 +39,7 @@ const NAMES = paths.buildNameIndex({
 
 const ALL_SCOPE = {
     characters: { all: true, selected: [] },
-    chats: { enabled: true },
+    chats: { all: true, selected: [], skip: [] },
     worlds: { all: true, selected: [] },
     presets: {
         openAI_Settings: { all: true, selected: [] },
@@ -49,7 +49,8 @@ const ALL_SCOPE = {
         themes: { all: true, selected: [] },
         backgrounds: { all: true, selected: [] },
     },
-    settings: { enabled: true },
+    personas: { all: true, selected: [] },
+    apiProfiles: { all: true, selected: [] },
 };
 
 const scopeWith = patch => ({ ...ALL_SCOPE, ...patch });
@@ -104,11 +105,12 @@ test('角色名里的非法字符被转义', () => {
     assert.strictEqual(remote.split('/').length, 2, `不该多出目录层级：${remote}`);
 });
 
-console.log('\n[2] 云端六个文件夹');
+console.log('\n[2] 云端七个文件夹');
 
-test('六类各自落到自己的文件夹', () => {
+test('七类各自落到自己的文件夹', () => {
     assert.strictEqual(paths.toRemote('worlds/世界书甲.json', NAMES), '世界书/世界书甲.json');
-    assert.strictEqual(paths.toRemote('settings.json', NAMES), '设置/settings.json');
+    assert.strictEqual(paths.toRemote('personas.json', NAMES), '用户人设/personas.json');
+    assert.strictEqual(paths.toRemote('api-profiles.json', NAMES), 'API配置/api-profiles.json');
     assert.ok(paths.toRemote('characters/m3p8w5.png', NAMES).startsWith('角色卡/'));
     assert.ok(paths.toRemote('chats/m3p8w5/x.jsonl', NAMES).startsWith('聊天记录/'));
     assert.strictEqual(paths.toRemote('QuickReplies/默认.json', NAMES), '预设/QuickReplies/默认.json');
@@ -156,7 +158,9 @@ test('每一类都能原样还原', () => {
         'QuickReplies/默认.json',
         'themes/暗色.json',
         'backgrounds/风景 图.jpg',
-        'settings.json',
+        'personas.json',
+        'User Avatars/user-default.png',
+        'api-profiles.json',
     ];
     for (const local of samples) {
         const remote = paths.toRemote(local, NAMES);
@@ -167,7 +171,7 @@ test('每一类都能原样还原', () => {
 test('预设与美化的第二层认白名单，串组或穿目录一律拒绝', () => {
     // 白名单本身就是越界防护：不在这一组里的目录名根本还原不出本地路径
     assert.strictEqual(paths.toLocal('预设/../../etc/passwd', NAMES), null);
-    assert.strictEqual(paths.toLocal('美化/../settings.json', NAMES), null);
+    assert.strictEqual(paths.toLocal('美化/../personas.json', NAMES), null);
     assert.strictEqual(paths.toLocal('预设/themes/x.json', NAMES), null, '主题不属于预设组');
     assert.strictEqual(paths.toLocal('美化/QuickReplies/x.json', NAMES), null, '快速回复不属于美化组');
     assert.strictEqual(paths.toLocal('预设/没这个目录/x.json', NAMES), null);
@@ -194,7 +198,8 @@ test('全选时六类都在范围内', () => {
     assert.strictEqual(paths.inScope('worlds/世界书甲.json', ALL_SCOPE), true);
     assert.strictEqual(paths.inScope('OpenAI Settings/我的预设.json', ALL_SCOPE), true);
     assert.strictEqual(paths.inScope('themes/暗色.json', ALL_SCOPE), true);
-    assert.strictEqual(paths.inScope('settings.json', ALL_SCOPE), true);
+    assert.strictEqual(paths.inScope('personas.json', ALL_SCOPE), true);
+    assert.strictEqual(paths.inScope('api-profiles.json', ALL_SCOPE), true);
 });
 
 test('只选一张角色卡时，别的角色卡与它的聊天都被排除', () => {
@@ -206,10 +211,37 @@ test('只选一张角色卡时，别的角色卡与它的聊天都被排除', ()
 });
 
 test('聊天记录跟随角色卡：关掉聊天只留角色卡', () => {
-    const scope = scopeWith({ chats: { enabled: false } });
+    const scope = scopeWith({ chats: { all: false, selected: [], skip: [] } });
     assert.strictEqual(paths.inScope('characters/k7f2q9x1.png', scope), true);
     assert.strictEqual(paths.inScope('chats/k7f2q9x1/x.jsonl', scope), false);
     assert.strictEqual(paths.inScope('group chats/群甲/x.jsonl', scope), false);
+});
+
+test('聊天可以逐条勾：只勾中的那条进范围', () => {
+    const scope = scopeWith({
+        chats: { all: false, selected: ['k7f2q9x1/2026-08-01 12h30m.jsonl'], skip: [] },
+    });
+    assert.strictEqual(paths.inScope('chats/k7f2q9x1/2026-08-01 12h30m.jsonl', scope), true);
+    assert.strictEqual(paths.inScope('chats/k7f2q9x1/2026-07-01 09h00m.jsonl', scope), false);
+    // 逐条模式下群聊无从跟随，不带
+    assert.strictEqual(paths.inScope('group chats/群甲/x.jsonl', scope), false);
+});
+
+test('全选态下单独排除某几条，其余照传', () => {
+    const scope = scopeWith({
+        chats: { all: true, selected: [], skip: ['k7f2q9x1/私密.jsonl'] },
+    });
+    assert.strictEqual(paths.inScope('chats/k7f2q9x1/私密.jsonl', scope), false);
+    assert.strictEqual(paths.inScope('chats/k7f2q9x1/别的.jsonl', scope), true);
+});
+
+test('没勾角色卡时，它的聊天一条都不传', () => {
+    const scope = scopeWith({
+        characters: { all: false, selected: ['k7f2q9x1.png'] },
+        chats: { all: false, selected: ['m3p8w5/x.jsonl'], skip: [] },
+    });
+    // 聊天被显式勾了，但它的角色卡没勾 —— 云端不该出现无主的聊天记录
+    assert.strictEqual(paths.inScope('chats/m3p8w5/x.jsonl', scope), false);
 });
 
 test('群聊不隶属角色卡，只选一张卡时依然整体带上', () => {
@@ -224,9 +256,21 @@ test('世界书按名字选', () => {
     assert.strictEqual(paths.inScope('worlds/世界书乙.json', scope), false);
 });
 
-test('设置默认不备份，勾上才进范围', () => {
-    assert.strictEqual(paths.inScope('settings.json', scopeWith({ settings: { enabled: false } })), false);
-    assert.strictEqual(paths.inScope('settings.json', scopeWith({ settings: { enabled: true } })), true);
+test('整份 settings.json 不再是备份对象', () => {
+    assert.strictEqual(paths.inScope('settings.json', ALL_SCOPE), false);
+    assert.strictEqual(paths.toRemote('settings.json', NAMES), null);
+    assert.strictEqual(paths.toLocal('设置/settings.json', NAMES), null);
+});
+
+test('人设与 API 配置各自按项勾选', () => {
+    const only = scopeWith({
+        personas: { all: false, selected: ['mine.png'] },
+        apiProfiles: { all: false, selected: [] },
+    });
+    assert.strictEqual(paths.inScope('personas.json', only), true, '选了人设就要传人设数据');
+    assert.strictEqual(paths.inScope('User Avatars/mine.png', only), true);
+    assert.strictEqual(paths.inScope('User Avatars/别人的.png', only), false);
+    assert.strictEqual(paths.inScope('api-profiles.json', only), false, '一个配置档都没勾');
 });
 
 test('范围之外的路径一律拒绝', () => {
@@ -318,7 +362,10 @@ test('每类文件都能归到正确的类别', () => {
     assert.strictEqual(paths.categoryOf('chats/角色甲/x.jsonl'), 'chats');
     assert.strictEqual(paths.categoryOf('group chats/群甲/x.jsonl'), 'chats');
     assert.strictEqual(paths.categoryOf('groups/g1.json'), 'chats');
-    assert.strictEqual(paths.categoryOf('settings.json'), 'settings');
+    assert.strictEqual(paths.categoryOf('personas.json'), 'personas');
+    assert.strictEqual(paths.categoryOf('User Avatars/x.png'), 'personas');
+    assert.strictEqual(paths.categoryOf('api-profiles.json'), 'apiProfiles');
+    assert.strictEqual(paths.categoryOf('settings.json'), 'other');
     assert.strictEqual(paths.categoryOf('OpenAI Settings/x.json'), 'presets');
     assert.strictEqual(paths.categoryOf('QuickReplies/默认.json'), 'presets');
     assert.strictEqual(paths.categoryOf('themes/暗色.json'), 'themes');
@@ -361,7 +408,7 @@ test('酒馆没建过的目录不会被当成要扫的根', () => {
 test('只勾了美化时，角色卡与预设目录都不扫', () => {
     const scope = scopeWith({
         characters: { all: false, selected: [] },
-        chats: { enabled: false },
+        chats: { all: false, selected: [], skip: [] },
         worlds: { all: false, selected: [] },
         presets: {
             openAI_Settings: { all: false, selected: [] },
@@ -394,7 +441,10 @@ test('相对路径能还原成绝对路径', () => {
         paths.localAbsPath(DIRECTORIES, 'characters/k7f2q9x1.png'),
         path.resolve('/data/user/characters/k7f2q9x1.png'),
     );
-    assert.strictEqual(paths.localAbsPath(DIRECTORIES, 'settings.json'), path.join('/data/user', 'settings.json'));
+    // 合成文件最终读写的都是 settings.json
+    assert.strictEqual(paths.localAbsPath(DIRECTORIES, 'personas.json'), path.join('/data/user', 'settings.json'));
+    assert.strictEqual(paths.localAbsPath(DIRECTORIES, 'api-profiles.json'), path.join('/data/user', 'settings.json'));
+    assert.strictEqual(paths.localAbsPath(DIRECTORIES, 'settings.json'), null, '整份设置已不在备份范围内');
     assert.strictEqual(
         paths.localAbsPath(DIRECTORIES, 'OpenAI Settings/我的预设.json'),
         path.resolve('/data/user/OpenAI Settings/我的预设.json'),
@@ -478,7 +528,8 @@ test('全新安装什么都不勾，一个目录都不用扫', () => {
     for (const local of [
         'characters/k7f2q9x1.png', 'chats/k7f2q9x1/x.jsonl', 'worlds/世界书甲.json',
         'OpenAI Settings/我的预设.json', 'QuickReplies/默认.json',
-        'themes/暗色.json', 'backgrounds/风景.jpg', 'settings.json',
+        'themes/暗色.json', 'backgrounds/风景.jpg',
+        'personas.json', 'User Avatars/x.png', 'api-profiles.json',
     ]) {
         assert.strictEqual(paths.inScope(local, scope), false, local);
     }

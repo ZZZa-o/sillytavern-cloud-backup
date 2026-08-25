@@ -41,6 +41,17 @@ export function currentAvatar() {
     return Number.isInteger(index) && list[index]?.avatar ? list[index].avatar : '';
 }
 
+/**
+ * 当前正在聊的角色叫什么。
+ * 云端是按角色名存放的，「当前角色」筛选要拿它去匹配远端路径，avatar 文件名对不上。
+ */
+export function currentCharacterName() {
+    const list = characterList();
+    const index = Number(this_chid);
+    const item = Number.isInteger(index) ? list[index] : null;
+    return item ? (item.name || item.avatar) : '';
+}
+
 // ---------------------------------------------------------------------------
 // 内嵌世界书
 // ---------------------------------------------------------------------------

@@ -6,14 +6,16 @@
  *   世界书        updateWorldInfoList()
  *   预设 / 主题    getSettings() —— 重拉 /api/settings/get，酒馆据此重建各个下拉框
  *   背景图        getBackgrounds()
+ *   用户人设      直接写内存的 power_user，再 getUserAvatars() 重绘人设面板
  *
- * 只有两样东西没有热加载入口：settings.json（影响面铺满整个界面）和快速回复
- * （QR 扩展的 loadSets 没有导出）。这两样才需要让用户刷新页面。
+ * 只有两样东西没有热加载入口，需要让用户刷新页面：快速回复（QR 扩展的 loadSets 没有导出）
+ * 和 API 连接配置（connection-manager 扩展一个函数都没导出）。
  */
 import { getCharacters, saveSettingsDebounced, getSettings } from '/script.js';
 import { updateWorldInfoList } from '/scripts/world-info.js';
 import { power_user } from '/scripts/power-user.js';
 import { getBackgrounds } from '/scripts/backgrounds.js';
+import { getUserAvatars, setPersonaDescription, user_avatar } from '/scripts/personas.js';
 
 import { notify } from './panel.js';
 
@@ -73,12 +75,14 @@ const SETTINGS_DIRS = ['OpenAI Settings', 'themes'];
 
 /**
  * 按下载到的类别刷新对应列表。
+ * result 是后端的下载结果（touched / touchedDirs / personaData）。
  * 返回一句给用户看的话；没有任何需要说明的就返回空串。
  */
-export async function reloadTouched(touched) {
+export async function reloadTouched(result) {
+    const touched = result?.touched || result;
     if (!touched) return '';
 
-    const dirs = Array.isArray(touched.touchedDirs) ? touched.touchedDirs : [];
+    const dirs = Array.isArray(result?.touchedDirs) ? result.touchedDirs : [];
     const refreshed = [];
 
     if (touched.characters > 0) {
@@ -102,11 +106,16 @@ export async function reloadTouched(touched) {
         }
     }
 
-    // settings.json 也被覆盖时不热加载 —— 那份设置铺满整个界面，
-    // 半热加载只会得到一半新一半旧的状态，不如老实让用户刷新。
-    const settingsOverwritten = touched.settings > 0;
+    if (touched.personas > 0) {
+        try {
+            await reloadPersonas(result?.personaData);
+            refreshed.push('用户人设');
+        } catch (error) {
+            console.warn('[SillyTavern Cloud Backup] 刷新用户人设失败：', error);
+        }
+    }
 
-    if (!settingsOverwritten && dirs.some(dir => SETTINGS_DIRS.includes(dir))) {
+    if (dirs.some(dir => SETTINGS_DIRS.includes(dir))) {
         try {
             await getSettings();
             if (touched.presets > 0) refreshed.push('预设');
@@ -132,8 +141,37 @@ export async function reloadTouched(touched) {
     // 聊天文件不用管：酒馆的「管理聊天文件」是现读的，落盘即可见。
 
     const stale = [];
-    if (settingsOverwritten) stale.push('设置');
+    if (touched.apiProfiles > 0) stale.push('API 配置');
     if (dirs.includes('QuickReplies')) stale.push('快速回复');
 
     return stale.length ? `${stale.join('、')}需要刷新页面才生效。` : '';
+}
+
+/**
+ * 人设热加载。
+ *
+ * 后端把合并后的三个字段带了回来，直接写进内存的 power_user，
+ * 再让酒馆重绘人设面板即可 —— 面板上的名字读的就是 power_user.personas。
+ * data 缺失（旧响应）时退化成只重绘，至少新下载的头像能露出来。
+ */
+async function reloadPersonas(data) {
+    if (data && typeof data === 'object') {
+        if (data.personas) power_user.personas = data.personas;
+        if (data.persona_descriptions) power_user.persona_descriptions = data.persona_descriptions;
+        if (data.default_persona !== undefined) power_user.default_persona = data.default_persona;
+    }
+
+    await getUserAvatars(true);
+
+    // 当前正用着的这个人设，描述可能刚被云端版本改掉了。
+    // 单数的 persona_description* 是它的展开值，不同步刷一下的话输入框里还是旧文本。
+    const current = power_user.persona_descriptions?.[user_avatar];
+    if (current) {
+        power_user.persona_description = current.description ?? '';
+        power_user.persona_description_position = current.position ?? power_user.persona_description_position;
+        power_user.persona_description_depth = current.depth ?? power_user.persona_description_depth;
+        power_user.persona_description_role = current.role ?? power_user.persona_description_role;
+        power_user.persona_description_lorebook = current.lorebook ?? '';
+        setPersonaDescription();
+    }
 }

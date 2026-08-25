@@ -20,6 +20,7 @@ const backup = require('./backup.js');
 const cloud = require('./cloud.js');
 const cards = require('./cards.js');
 const builtin = require('./builtin.js');
+const synthetic = require('./synthetic.js');
 
 const info = {
     id: 'sillytavern-cloud-backup',
@@ -97,7 +98,17 @@ function init(router) {
             lastBackupAt: state.lastBackupAt || config.lastBackupAt || '',
             // 范围弹窗要用：预设与美化各有哪些目录、各有多少文件多大
             scopeDirs: backup.scopeDirStats(request.user.directories),
+            // 角色卡文件夹标题上的「N 条聊天」。明细走 chats/list 按需拿
+            chatCounts: backup.chatCounts(request.user.directories),
+            // 人设与 API 配置的可选项。都是从 settings.json 里读出来的，不含密钥本身
+            personas: synthetic.listPersonas(request.user.directories),
+            apiProfiles: synthetic.listApiProfiles(request.user.directories),
         };
+    }));
+
+    // 展开某张角色卡时才来要它的聊天明细 —— 角色多起来一次性回传能到几百 KB
+    router.post('/chats/list', (request, response) => handle(response, async () => {
+        return { entries: backup.chatEntries(request.user.directories, request.body?.stem) };
     }));
 
     router.post('/config/load', (request, response) => handle(response, async () => {
