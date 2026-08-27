@@ -31,6 +31,30 @@ function timestampForFile(date = new Date()) {
         + `-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
 }
 
+/**
+ * 目录项到底是文件还是目录。
+ *
+ * 不能光信 Dirent —— readdir 的 d_type 不是所有文件系统都给：
+ * 安卓共享存储（/sdcard 那套 FUSE）、部分网络挂载都会返回 DT_UNKNOWN，
+ * 这时 isDirectory() 与 isFile() **同时为假**，整个目录会被静默跳过；
+ * 符号链接也一样两头不沾，而 Termux 上把数据目录链到别处是常规操作。
+ *
+ * 所以拿不准就补一次 stat（stat 会跟随符号链接）。d_type 正常的系统上
+ * 前两行就返回了，一次多余的系统调用都不会发生。
+ */
+function entryKind(parent, dirent) {
+    if (dirent.isDirectory()) return 'dir';
+    if (dirent.isFile()) return 'file';
+    try {
+        const stats = fs.statSync(path.join(parent, dirent.name));
+        if (stats.isDirectory()) return 'dir';
+        if (stats.isFile()) return 'file';
+    } catch {
+        // 扫描期间被删了，或者是条断掉的符号链接
+    }
+    return 'other';
+}
+
 // 元数据单独一层，遍历备份区时跳过
 const META_DIR = '.st-sync';
 const INDEX_NAME = 'index.json';
@@ -71,11 +95,12 @@ async function walkLocal(dir, prefix, out, hashCache, scope) {
         if (dirent.name.startsWith('.')) continue;
         const full = path.join(dir, dirent.name);
         const rel = `${prefix}/${dirent.name}`;
-        if (dirent.isDirectory()) {
+        const kind = entryKind(dir, dirent);
+        if (kind === 'dir') {
             await walkLocal(full, rel, out, hashCache, scope);
             continue;
         }
-        if (!dirent.isFile()) continue;
+        if (kind !== 'file') continue;
         if (!paths.inScope(rel, scope)) continue;
         await addLocalFile(full, rel, out, hashCache);
     }
@@ -476,7 +501,8 @@ function chatCounts(directories) {
     }
 
     for (const dirent of dirents) {
-        if (!dirent.isDirectory() || dirent.name.startsWith('.')) continue;
+        if (dirent.name.startsWith('.')) continue;
+        if (entryKind(base, dirent) !== 'dir') continue;
         const files = listDirFiles(path.join(base, dirent.name));
         out[dirent.name] = {
             files: files.length,
@@ -527,9 +553,10 @@ function listDirFiles(dir) {
             if (dirent.name.startsWith('.')) continue;
             const full = path.join(current, dirent.name);
             const rel = prefix ? `${prefix}/${dirent.name}` : dirent.name;
-            if (dirent.isDirectory()) {
+            const kind = entryKind(current, dirent);
+            if (kind === 'dir') {
                 walk(full, rel);
-            } else if (dirent.isFile()) {
+            } else if (kind === 'file') {
                 try {
                     out.push({ rel, bytes: fs.statSync(full).size });
                 } catch {

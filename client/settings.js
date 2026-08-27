@@ -52,12 +52,27 @@ export function getScopeDirs(group) {
  */
 let chatCounts = {};
 
+/**
+ * 后端到底有没有把这项数据送来。
+ *
+ * 「一条都没有」与「后端压根没给」在界面上长得一模一样，但对用户的意义天差地别：
+ * 前者不用管，后者是服务端插件还是旧版（或装了新版没重启）。
+ * 旧版后端的 /status 里根本没有这几个字段，只能靠"字段在不在"分辨。
+ */
+const supplied = { chatCounts: false, synth: false };
+
 export function setChatCounts(incoming) {
-    chatCounts = incoming && typeof incoming === 'object' ? incoming : {};
+    supplied.chatCounts = !!incoming && typeof incoming === 'object';
+    chatCounts = supplied.chatCounts ? incoming : {};
 }
 
 export function getChatCount(stem) {
     return chatCounts[stem] || { files: 0, bytes: 0 };
+}
+
+/** 后端有没有提供聊天条数。false 表示后端太旧，不是"真的没有聊天"。 */
+export function chatCountsSupplied() {
+    return supplied.chatCounts;
 }
 
 /**
@@ -67,6 +82,8 @@ export function getChatCount(stem) {
 let synthLists = { personas: [], apiProfiles: [] };
 
 export function setSynthLists(incoming = {}) {
+    // 两个字段但凡有一个是数组，就说明后端认得这套接口
+    supplied.synth = Array.isArray(incoming.personas) || Array.isArray(incoming.apiProfiles);
     synthLists = {
         personas: Array.isArray(incoming.personas) ? incoming.personas : [],
         apiProfiles: Array.isArray(incoming.apiProfiles) ? incoming.apiProfiles : [],
@@ -75,6 +92,11 @@ export function setSynthLists(incoming = {}) {
 
 export function getSynthList(group) {
     return synthLists[group] || [];
+}
+
+/** 后端有没有提供人设与 API 配置。false 表示后端太旧。 */
+export function synthListsSupplied() {
+    return supplied.synth;
 }
 
 /** 某个目录的选择集，配置里还没有这一项时给个空的（不会写回配置）。 */

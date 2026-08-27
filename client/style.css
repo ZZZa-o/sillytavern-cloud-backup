@@ -538,6 +538,14 @@
     color: var(--stcb-muted);
 }
 
+/* 「后端没给数据」不是普通的空列表：用告警色 + 可换行，把话说完整。
+   灰扑扑地混在正常空态里，用户只会以为自己真的没有这些数据 */
+.stcb-scope-empty.is-warn {
+    color: color-mix(in srgb, var(--stcb-warn) 85%, var(--SmartThemeBodyColor));
+    line-height: 1.5;
+    white-space: normal;
+}
+
 /* 「含聊天记录」这类开关按钮：开着时颜色加深，和旁边的一次性动作按钮区分开 */
 .stcb-scope-popup .stcb-scope-toggle.is-on {
     border-color: color-mix(in srgb, var(--stcb-accent) 70%, transparent);

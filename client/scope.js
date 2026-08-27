@@ -17,8 +17,19 @@ import { characterEntries, worldEntries, currentAvatar, embeddedWorldNames } fro
 import {
     getConfig, describeScope, scopeEnabled, selectionCount, selectionEmpty,
     getScopeDirs, dirSelection, ensureDirSelection, getChatCount, getSynthList,
+    chatCountsSupplied, synthListsSupplied,
 } from './settings.js';
 import { escHtml, prettyBytes } from './panel.js';
+
+/**
+ * 后端没送来这项数据时说的话。
+ *
+ * 绝不能退回「酒馆里还没有用户人设」那种说法 —— 那是在撒谎，
+ * 用户会去翻自己的酒馆找问题，而真正的毛病在服务端插件那一侧。
+ */
+const BACKEND_TOO_OLD = '后端插件没有返回这项数据。多半是服务端插件还是旧版，'
+    + '或者更新了文件但没重启酒馆 —— 服务端插件只在酒馆启动时加载一次，光刷新页面没用。'
+    + '请更新 plugins/sillytavern-cloud-backup 后彻底关掉酒馆进程再重开。';
 
 /** 因为已内嵌在角色卡里而没有列出来的世界书数量。 */
 function embeddedWorldCount() {
@@ -28,6 +39,15 @@ function embeddedWorldCount() {
 /** 角色卡文件名去扩展名 —— 它就是这个角色的聊天目录名。 */
 function stemOf(avatar) {
     return String(avatar || '').replace(/\.[^.]+$/, '');
+}
+
+/**
+ * 触屏设备（手机、平板）。
+ * 用指针精度判断而不是 UA —— 带触摸屏的笔记本会被算进来，
+ * 代价只是少一次自动聚焦，比误判成桌面直接弹出输入法轻得多。
+ */
+function isTouchScreen() {
+    return window.matchMedia?.('(pointer: coarse)')?.matches === true;
 }
 
 // kind 决定二级视图长什么样：cards 是角色卡文件夹，dirs 是目录文件夹，list 是平铺多选
@@ -62,6 +82,8 @@ const folderKey = (group, key) => `${group}:${key}`;
 // 某个角色的聊天明细。展开那一刻才拉，拉过就留着，反复折叠不再打扰后端
 const chatCache = new Map();
 const chatLoading = new Set();
+// 拉失败的原因，按角色目录名记。空列表到底是"没有"还是"没拉到"全靠它分辨
+const chatErrors = new Map();
 
 /** 目录里有几项可备份：有明细的按文件数，整类开关的算一项。 */
 function dirWeight(dir) {
@@ -140,6 +162,7 @@ export async function openScopePopup() {
     const original = JSON.parse(JSON.stringify(scope));
     // 聊天文件是聊着聊着就多出来的，缓存留到下次打开就是旧的了
     chatCache.clear();
+    chatErrors.clear();
 
     const root = document.createElement('div');
     root.innerHTML = popupHtml();
@@ -197,7 +220,9 @@ export async function openScopePopup() {
         view('root').hidden = true;
         view('picker').hidden = false;
         renderList();
-        searchInput.focus();
+        // 手机上别抢焦点 —— 一点进分类就弹出输入法，挡住半屏列表，
+        // 而进来的人十有八九是想直接翻列表，不是想搜索。要搜的自己点搜索框。
+        if (!isTouchScreen()) searchInput.focus();
     };
 
     const renderList = () => {
@@ -244,9 +269,13 @@ export async function openScopePopup() {
         chatLoading.add(stem);
         try {
             const data = await api('chats/list', { stem });
+            chatErrors.delete(stem);
             chatCache.set(stem, Array.isArray(data.entries) ? data.entries : []);
         } catch (error) {
             console.warn('[SillyTavern Cloud Backup] 读取聊天列表失败：', error);
+            // 旧版后端没有 chats/list 这个路由，酒馆会回 404。
+            // 把它和"这个角色真的没聊天"分开，否则用户根本无从下手
+            chatErrors.set(stem, String(error?.message || error));
             chatCache.set(stem, []);
         } finally {
             chatLoading.delete(stem);
@@ -262,6 +291,7 @@ export async function openScopePopup() {
             ? entries.filter(item => `${item.label} ${item.value}`.toLowerCase().includes(word))
             : entries;
         const current = currentAvatar();
+        const chatsKnown = chatCountsSupplied();
 
         if (!entries.length) {
             pick('list').innerHTML = `<div class="stcb-scope-empty">${escHtml(meta.empty)}</div>`;
@@ -281,9 +311,10 @@ export async function openScopePopup() {
             const open = expanded.has(folderKey('characters', stem));
 
             const tag = item.value === current ? '<small class="stcb-scope-tag">当前</small>' : '';
+            // 后端没送聊天条数时不能写"无聊天记录" —— 那是在替后端的毛病背锅
             const note = count.files
                 ? `${count.files} 条聊天 · ${prettyBytes(count.bytes)}`
-                : '无聊天记录';
+                : (chatsKnown ? '无聊天记录' : '后端未提供聊天数据');
 
             let rows = '';
             if (open) {
@@ -292,7 +323,10 @@ export async function openScopePopup() {
                     rows = '<div class="stcb-scope-empty">正在读取聊天列表…</div>';
                     loadChats(stem);
                 } else if (!chats.length) {
-                    rows = '<div class="stcb-scope-empty">这个角色还没有聊天记录。</div>';
+                    const failed = chatErrors.get(stem);
+                    rows = failed
+                        ? `<div class="stcb-scope-empty is-warn">读取聊天列表失败：${escHtml(failed)}<br>${escHtml(BACKEND_TOO_OLD)}</div>`
+                        : '<div class="stcb-scope-empty">这个角色还没有聊天记录。</div>';
                 } else {
                     rows = chats.map(chat => `<label class="stcb-scope-folder-item">`
                         + `<input type="checkbox" data-role="chat" value="${escHtml(chat.value)}"`
@@ -344,7 +378,12 @@ export async function openScopePopup() {
             : entries;
 
         if (!entries.length) {
-            pick('list').innerHTML = `<div class="stcb-scope-empty">${escHtml(meta.empty)}</div>`;
+            // 人设与 API 配置全靠后端送。后端没送来就直说，别谎报"你没有"
+            const stale = (activeKind === 'personas' || activeKind === 'apiProfiles')
+                && !synthListsSupplied();
+            pick('list').innerHTML = stale
+                ? `<div class="stcb-scope-empty is-warn">${escHtml(BACKEND_TOO_OLD)}</div>`
+                : `<div class="stcb-scope-empty">${escHtml(meta.empty)}</div>`;
         } else if (!visible.length) {
             pick('list').innerHTML = '<div class="stcb-scope-empty">没有匹配的条目。</div>';
         } else {
