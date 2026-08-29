@@ -21,6 +21,7 @@ const GROUP_ORDER = [
 const GROUP_CHARACTERS = '角色卡';
 const GROUP_CHATS = '聊天记录';
 const GROUP_PERSONAS = '用户人设';
+const PERSONA_FILE = 'persona.json';
 
 let items = [];
 const selected = new Set();
@@ -141,10 +142,19 @@ export function renderCloud() {
     const html = [...groups.entries()]
         .sort((a, b) => groupOf(a[0]) - groupOf(b[0]))
         .map(([name, entries]) => {
-            const rows = sortEntries(entries).map(item => {
+            const shownEntries = name === GROUP_PERSONAS ? foldPersonas(entries) : entries;
+            const rows = sortEntries(shownEntries).map(item => {
                 const checked = selected.has(item.remote) ? ' checked' : '';
                 // 只显示分组下的相对路径，前缀已经写在分组标题上了
                 const shown = item.remote.split('/').slice(1).join('/') || item.remote;
+                // 折起来的人设：一行就是一整个人设，勾一次连头像一起下载
+                if (item.folded) {
+                    return `<label class="stcb-cloud-item">`
+                        + `<input type="checkbox" value="${escHtml(item.remote)}"${checked}>`
+                        + `<span class="stcb-cloud-name" title="${escHtml(item.folder)}">${escHtml(item.label)}</span>`
+                        + `<small>整个人设 · ${escHtml(prettyBytes(item.size))} · ${escHtml(prettyDate(item.modified))}</small>`
+                        + `</label>`;
+                }
                 // 人设头像的文件名是个时间戳，认不出是谁 —— 后端给了人设名就显示名字，
                 // 真实文件名退到后面的小字里，仍然看得见
                 const title = item.label || shown;
@@ -169,7 +179,7 @@ export function renderCloud() {
             return `<details class="stcb-cloud-group" data-group="${escHtml(name)}"${open}>`
                 + `<summary>`
                 + `<input type="checkbox" class="stcb-cloud-group-check" data-group="${escHtml(name)}"${allChecked ? ' checked' : ''}>`
-                + `<span>${escHtml(name)} · ${entries.length}</span>${link}</summary>`
+                + `<span>${escHtml(name)} · ${shownEntries.length}</span>${link}</summary>`
                 + `<div class="stcb-cloud-rows">${rows}</div></details>`;
         })
         .join('');
@@ -220,6 +230,47 @@ function applyToggle(remote, checked) {
     const chats = chatsOfCharacter(name);
     for (const chat of chats) apply(chat.remote);
     return chats.length > 0;
+}
+
+/**
+ * 一个人设在列表里只占一行。
+ *
+ * 网盘上一个人设是一整个文件夹（persona.json + 头像），但对用户来说那就是"一个人设"，
+ * 分成两行摆着既啰嗦又容易只勾一半。这里把每个文件夹折成一条：
+ * 大小是文件夹合计，时间取最新的那个，勾选落在 persona.json 上 ——
+ * applyToggle 会把同文件夹的头像一起带上，所以勾一次就是整个人设。
+ *
+ * 旧布局那些平铺在 用户人设/ 下的文件不成文件夹，原样逐行显示。
+ */
+function foldPersonas(entries) {
+    const folders = new Map();
+    const out = [];
+
+    for (const item of entries) {
+        const folder = personaFolderOf(item.remote);
+        if (!folder) {
+            out.push(item);
+            continue;
+        }
+        const group = folders.get(folder);
+        if (group) group.push(item);
+        else folders.set(folder, [item]);
+    }
+
+    for (const [folder, group] of folders) {
+        const anchor = group.find(item => item.remote.endsWith(`/${PERSONA_FILE}`)) || group[0];
+        out.push({
+            ...anchor,
+            folded: true,
+            folder,
+            // 文件夹名就是人设名
+            label: folder.split('/')[1],
+            size: group.reduce((sum, item) => sum + (item.size || 0), 0),
+            modified: group.map(item => item.modified).filter(Boolean).sort().pop() || '',
+        });
+    }
+
+    return out;
 }
 
 /**
