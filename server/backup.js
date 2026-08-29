@@ -70,7 +70,7 @@ const NON_BACKUP_DIRS = [META_DIR];
  * hashCache 传上次的扫描结果：大小与 mtime 都没变就复用旧哈希，
  * 避免每次备份都把所有聊天读一遍。
  */
-async function scanLocal(directories, scope, hashCache = {}) {
+async function scanLocal(directories, scope, hashCache = {}, names = null) {
     const out = {};
     for (const root of paths.scanRoots(directories, scope)) {
         await walkLocal(root.dir, root.prefix, out, hashCache, scope);
@@ -79,11 +79,15 @@ async function scanLocal(directories, scope, hashCache = {}) {
     // 源数据一改哈希就变，下次备份必然识别为需要更新。
     // 不套 mtime 缓存是因为那样两头都不准 —— 酒馆频繁改写 settings.json，
     // mtime 变了不代表人设变了；反过来也一样。反正只有几 KB，现算最可靠。
-    for (const group of ['personas', 'apiProfiles']) {
-        const file = synthetic.fileOfGroup(group);
-        if (!file || !paths.inScope(file, scope)) continue;
-        const buffer = synthetic.build(file, directories, scope);
-        out[file] = { hash: sha256(buffer), size: buffer.length, mtime: '' };
+    //
+    // 人设与 API 配置都是一项一份：勾了谁就只拼谁，云端也就只动那一份
+    const synth = [
+        ...synthetic.listPersonaFiles(directories, scope.personas, names?.personas?.byAvatar || {}),
+        ...synthetic.listApiProfileFiles(directories, scope.apiProfiles, names?.profiles?.byId || {}),
+    ];
+    for (const item of synth) {
+        const buffer = synthetic.build(item.localRel, directories, scope, names);
+        out[item.localRel] = { hash: sha256(buffer), size: buffer.length, mtime: '' };
     }
     return out;
 }
@@ -177,13 +181,13 @@ const PLAN_PREVIEW_LIMIT = 40;
  * 上传方向按"需要覆盖"处理，下载方向按"需要拉取"处理 —— 两边都不会静默跳过。
  */
 function buildPlan(context) {
-    const { local, remoteIndex, remotePresent, scope } = context;
+    const { local, remoteIndex, remotePresent, scope, names } = context;
     const plan = { upload: [], download: [], unchanged: 0 };
 
     const all = new Set([...Object.keys(local), ...Object.keys(remotePresent)]);
 
     for (const relPath of all) {
-        if (!paths.inScope(relPath, scope)) continue;
+        if (!paths.inScope(relPath, scope, names)) continue;
 
         const localHash = local[relPath]?.hash || null;
         const present = Object.prototype.hasOwnProperty.call(remotePresent, relPath);
@@ -303,7 +307,7 @@ async function collectContext(user, config, names) {
 
     await webdav.ensureRoot(config);
 
-    const local = await scanLocal(directories, config.scope, state.cache);
+    const local = await scanLocal(directories, config.scope, state.cache, names);
     const remoteIndex = await readRemoteIndex(config);
 
     // 实际远端文件树，用来发现绕过本插件的手动增删
@@ -373,7 +377,7 @@ async function runUpload(user, config, names) {
 
                 // 合成文件现拼出来，磁盘上没有它对应的文件
                 const buffer = isSynthetic
-                    ? synthetic.build(item.path, directories, config.scope)
+                    ? synthetic.build(item.path, directories, config.scope, names)
                     : await fs.promises.readFile(absPath);
                 const segments = remoteRel.split('/');
                 await webdav.ensureDir(config, segments.slice(0, -1), createdDirs);
@@ -443,7 +447,9 @@ async function applyDownloaded(directories, localRel, buffer, result) {
     if (synthetic.isSynthetic(localRel)) {
         const merged = synthetic.merge(localRel, directories, buffer);
         // 人设能热加载，把合并后的结果带回前端，省得让用户刷新页面
-        if (localRel === synthetic.PERSONAS_FILE) result.personaData = merged.data;
+        // 人设合并后的三件套带回前端热加载。一次下载多个人设时后一次覆盖前一次，
+        // 每次拿到的都是合并后的全量，取最后一份即可
+        if (paths.categoryOf(localRel) === 'personas') result.personaData = merged.data;
         absPath = merged.absPath;
     } else {
         absPath = await writeLocal(directories, localRel, buffer);

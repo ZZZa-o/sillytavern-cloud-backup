@@ -40,7 +40,10 @@ async function handle(response, fn) {
 /** 角色名映射；前端没带就退化成用 avatar 文件名当角色名，功能不受影响只是网盘里不好认。 */
 function readNames(request) {
     const raw = request.body?.characterNames;
-    return paths.buildNameIndex(raw && typeof raw === 'object' ? raw : {});
+    return paths.buildNameIndex(
+        raw && typeof raw === 'object' ? raw : {},
+        request.user?.directories || null,
+    );
 }
 
 /**
@@ -168,7 +171,7 @@ function init(router) {
 
     router.post('/cloud/list', (request, response) => handle(response, async () => {
         const config = configStore.resolveConfig(request.user.directories);
-        return { items: await cloud.list(config, readNames(request)) };
+        return { items: await cloud.list(config, readNames(request), request.user) };
     }));
 
     router.post('/cloud/download', (request, response) => handle(response, async () => {

@@ -15,6 +15,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const synthetic = require(path.join(__dirname, '..', 'server', 'synthetic.js'));
+const paths = require(path.join(__dirname, '..', 'server', 'paths.js'));
 
 let passed = 0;
 let failed = 0;
@@ -291,6 +292,119 @@ test('酒馆还没建过这两样东西时返回空列表，不抛异常', () =>
     withUserDir({}, {}, (dirs) => {
         assert.deepStrictEqual(synthetic.listPersonas(dirs), []);
         assert.deepStrictEqual(synthetic.listApiProfiles(dirs), []);
+    });
+});
+
+console.log('\n[5] 一项一份：人设与 API 配置各自独立');
+
+/** 带头像目录的临时数据目录 —— listPersonas 以磁盘上的头像文件为准。 */
+function withAvatars(settings, secrets, fn) {
+    return withUserDir(settings, secrets, (dirs, read) => {
+        const avatars = path.join(dirs.root, 'User Avatars');
+        fs.mkdirSync(avatars, { recursive: true });
+        for (const name of ['a.png', 'b.png']) fs.writeFileSync(path.join(avatars, name), 'x');
+        return fn({ ...dirs, avatars }, read);
+    });
+}
+
+test('列表只认磁盘上真实存在的头像，settings 里的幽灵条目不出现', () => {
+    const ghosted = {
+        ...SOURCE_SETTINGS,
+        power_user: {
+            ...SOURCE_SETTINGS.power_user,
+            // 头像早被删掉、只在 settings.json 里残留的旧条目：酒馆自己也不显示它
+            personas: { ...SOURCE_SETTINGS.power_user.personas, 'gone.png': '甲' },
+        },
+    };
+    withAvatars(ghosted, SOURCE_SECRETS, (dirs) => {
+        const list = synthetic.listPersonas(dirs);
+        assert.deepStrictEqual(list.map(item => item.value), ['a.png', 'b.png']);
+        // 重名人设靠头像文件名区分，所以每条都得带上它
+        assert.deepStrictEqual(list.map(item => item.note), ['a.png', 'b.png']);
+    });
+});
+
+test('人设名里塞了整段描述时，列表标签会截断', () => {
+    const wordy = {
+        power_user: { personas: { 'a.png': '甲'.repeat(80) }, persona_descriptions: {} },
+    };
+    withAvatars(wordy, {}, (dirs) => {
+        const item = synthetic.listPersonas(dirs).find(entry => entry.value === 'a.png');
+        assert.ok(item.label.length <= 41, `标签长度 ${item.label.length}`);
+        assert.strictEqual(item.fullName.length, 80, '完整名字仍然留着');
+    });
+});
+
+test('一个人设一份文件，只带自己那一份数据', () => {
+    withAvatars(SOURCE_SETTINGS, SOURCE_SECRETS, (dirs) => {
+        const names = paths.buildNameIndex({}, dirs);
+        const data = JSON.parse(synthetic.build('personas/甲.json', dirs, {}, names).toString());
+        assert.strictEqual(data.avatar, 'a.png');
+        assert.strictEqual(data.name, '甲');
+        assert.strictEqual(data.description.description, '甲的设定');
+        assert.strictEqual(data.isDefault, true);
+        assert.strictEqual(JSON.stringify(data).includes('乙'), false, '别人的人设一个字都不该出现');
+    });
+});
+
+test('下载一个人设只动它自己，本机其他人设纹丝不动', () => {
+    withAvatars(SOURCE_SETTINGS, SOURCE_SECRETS, (dirs, read) => {
+        const cloud = Buffer.from(JSON.stringify({
+            avatar: 'c.png', name: '丙', description: { description: '丙的设定' }, isDefault: false,
+        }));
+        synthetic.merge('personas/丙.json', dirs, cloud);
+        const power = read.settings().power_user;
+        assert.strictEqual(power.personas['c.png'], '丙');
+        assert.strictEqual(power.personas['b.png'], '乙');
+        assert.strictEqual(power.persona_descriptions['b.png'].description, '乙的设定');
+        assert.strictEqual(power.default_persona, 'a.png', 'isDefault 为假不该抢走默认人设');
+    });
+});
+
+test('人设文件里的头像文件名不合法就拒绝合并', () => {
+    withAvatars(SOURCE_SETTINGS, SOURCE_SECRETS, (dirs) => {
+        assert.throws(() => synthetic.merge(
+            'personas/坏的.json', dirs, Buffer.from(JSON.stringify({ avatar: '../../evil.png' }))));
+    });
+});
+
+test('一个 API 配置一份文件，只带它自己引用的密钥', () => {
+    withAvatars(SOURCE_SETTINGS, SOURCE_SECRETS, (dirs) => {
+        const names = paths.buildNameIndex({}, dirs);
+        const data = JSON.parse(synthetic.build('api-profiles/配置一.json', dirs, {}, names).toString());
+        assert.deepStrictEqual(data.profiles.map(item => item.id), ['p1']);
+        assert.deepStrictEqual(data.secrets.map(item => item.id), ['s1']);
+        assert.deepStrictEqual(data.proxies.map(item => item.name), ['源机代理']);
+    });
+});
+
+test('远端路径用的是人设名与配置名，且能原样映射回来', () => {
+    withAvatars(SOURCE_SETTINGS, SOURCE_SECRETS, (dirs) => {
+        const names = paths.buildNameIndex({}, dirs);
+        assert.strictEqual(paths.toRemote('personas/甲.json', names), '用户人设/甲/persona.json');
+        assert.strictEqual(paths.toRemote('User Avatars/a.png', names), '用户人设/甲/a.png');
+        assert.strictEqual(paths.toRemote('api-profiles/配置一.json', names), 'API配置/配置一.json');
+        assert.strictEqual(paths.toLocal('用户人设/甲/persona.json', names), 'personas/甲.json');
+        assert.strictEqual(paths.toLocal('用户人设/甲/a.png', names), 'User Avatars/a.png');
+        assert.strictEqual(paths.toLocal('API配置/配置一.json', names), 'api-profiles/配置一.json');
+    });
+});
+
+test('范围只放行勾中的那一个人设 / 那一档配置', () => {
+    withAvatars(SOURCE_SETTINGS, SOURCE_SECRETS, (dirs) => {
+        const names = paths.buildNameIndex({}, dirs);
+        const scope = {
+            personas: { all: false, selected: ['a.png'] },
+            apiProfiles: { all: false, selected: ['p1'] },
+        };
+        assert.strictEqual(paths.inScope('personas/甲.json', scope, names), true);
+        assert.strictEqual(paths.inScope('personas/乙.json', scope, names), false);
+        assert.strictEqual(paths.inScope('User Avatars/a.png', scope, names), true);
+        assert.strictEqual(paths.inScope('User Avatars/b.png', scope, names), false);
+        assert.strictEqual(paths.inScope('api-profiles/配置一.json', scope, names), true);
+        assert.strictEqual(paths.inScope('api-profiles/配置二.json', scope, names), false);
+        // 换台机器时本机还没有这个人设，反查不到头像文件名，此时只看这一类开着没有
+        assert.strictEqual(paths.inScope('personas/丙.json', scope, names), true);
     });
 });
 

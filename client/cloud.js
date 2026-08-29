@@ -13,10 +13,14 @@ import {
 } from './panel.js';
 
 // 分组显示顺序：常用的几类在前，元数据与认不出来的垫底
-const GROUP_ORDER = ['角色卡', '聊天记录', '世界书', '预设', '美化', '设置', '其他', '插件元数据'];
+const GROUP_ORDER = [
+    '角色卡', '聊天记录', '世界书', '用户人设', 'API 配置',
+    '预设', '美化', '设置', '其他', '插件元数据',
+];
 
 const GROUP_CHARACTERS = '角色卡';
 const GROUP_CHATS = '聊天记录';
+const GROUP_PERSONAS = '用户人设';
 
 let items = [];
 const selected = new Set();
@@ -38,7 +42,7 @@ function keyword() {
 function visibleItems() {
     const word = keyword();
     if (!word) return items;
-    return items.filter(item => `${item.remote} ${item.local}`.toLowerCase().includes(word));
+    return items.filter(item => `${item.remote} ${item.local} ${item.label || ''}`.toLowerCase().includes(word));
 }
 
 function groupOf(name) {
@@ -141,10 +145,14 @@ export function renderCloud() {
                 const checked = selected.has(item.remote) ? ' checked' : '';
                 // 只显示分组下的相对路径，前缀已经写在分组标题上了
                 const shown = item.remote.split('/').slice(1).join('/') || item.remote;
+                // 人设头像的文件名是个时间戳，认不出是谁 —— 后端给了人设名就显示名字，
+                // 真实文件名退到后面的小字里，仍然看得见
+                const title = item.label || shown;
+                const trail = item.label ? `${shown} · ` : '';
                 return `<label class="stcb-cloud-item">`
                     + `<input type="checkbox" value="${escHtml(item.remote)}"${checked}>`
-                    + `<span class="stcb-cloud-name">${escHtml(shown)}</span>`
-                    + `<small>${escHtml(prettyBytes(item.size))} · ${escHtml(prettyDate(item.modified))}</small>`
+                    + `<span class="stcb-cloud-name" title="${escHtml(shown)}">${escHtml(title)}</span>`
+                    + `<small>${escHtml(trail)}${escHtml(prettyBytes(item.size))} · ${escHtml(prettyDate(item.modified))}</small>`
                     + `</label>`;
             }).join('');
             const allChecked = entries.every(item => selected.has(item.remote));
@@ -195,6 +203,16 @@ function applyToggle(remote, checked) {
     const apply = value => (checked ? selected.add(value) : selected.delete(value));
     apply(remote);
 
+    // 一个人设是一整个文件夹：persona.json（名字、描述、注入设置）+ 头像图。
+    // 只拉头像不拉 persona.json，酒馆里出现的会是个叫 [Unnamed Persona] 的空壳，
+    // 所以这个文件夹里的东西一律同进同出
+    const folder = personaFolderOf(remote);
+    if (folder) {
+        const siblings = items.filter(item => item.remote.startsWith(folder));
+        for (const item of siblings) apply(item.remote);
+        return siblings.length > 1;
+    }
+
     if (!linkChats) return false;
     const name = characterNameOf(remote);
     if (!name) return false;
@@ -202,6 +220,16 @@ function applyToggle(remote, checked) {
     const chats = chatsOfCharacter(name);
     for (const chat of chats) apply(chat.remote);
     return chats.length > 0;
+}
+
+/**
+ * 这个远端文件属于哪个人设文件夹，返回带斜杠的前缀（用户人设/沈知微/）。
+ * 不在人设文件夹里（旧布局的平铺头像、别的分组）返回空串。
+ */
+function personaFolderOf(remote) {
+    const parts = String(remote).split('/');
+    if (parts.length !== 3 || parts[0] !== GROUP_PERSONAS) return '';
+    return `${parts[0]}/${parts[1]}/`;
 }
 
 /** 勾选/取消单个文件。 */

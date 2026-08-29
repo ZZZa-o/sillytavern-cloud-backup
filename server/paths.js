@@ -7,14 +7,19 @@
  *   角色卡/<角色名>.png                ← 按角色名存，不是本地的 avatar 文件名
  *   聊天记录/<角色名>/<聊天文件>.jsonl   ← 目录名同样换成角色名
  *   聊天记录/_群聊/…  聊天记录/_群组/…
- *   用户人设/personas.json             ← 合成文件，见 synthetic.js
- *   用户人设/<头像文件名>.png
+ *   用户人设/<人设名>/persona.json      ← 合成文件，一个人设一份，见 synthetic.js
+ *   用户人设/<人设名>/<头像文件名>.png   ← 头像跟着它的人设进同一个文件夹
  *   预设/OpenAI Settings/…             ← 第二层沿用酒馆的原目录名，往返映射无歧义
  *   美化/themes/…
  *   世界书/<世界书名>.json             ← 只有独立世界书；内嵌在 png 里的跟着角色卡走
- *   API配置/api-profiles.json          ← 合成文件，含明文密钥
+ *   API配置/<配置名>.json              ← 合成文件，一档一份，含明文密钥
+ *
+ * 人设与 API 配置拆到"一项一份"是为了下载时互不牵连：勾一个人设，落地的就只有
+ * 那一个人设，本机其他人设一个字都不会被动到。旧版本把它们各挤在一份
+ * personas.json / api-profiles.json 里，网盘上已有的那种还读得回来（见 toLocal）。
  *
  * 角色名由前端随请求带上（酒馆前端才知道 png 里的角色叫什么），后端只负责去重与转义。
+ * 人设名与配置名前端不知道（长在 settings.json 里），由后端自己读，见 buildNameIndex。
  */
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -113,12 +118,77 @@ function stemOf(fileName) {
 // ---------------------------------------------------------------------------
 
 /**
+ * 人设索引：头像文件名 ↔ 远端文件夹名（= 人设名）。
+ *
+ * 网盘上一个人设占一个文件夹（用户人设/沈知微/），文件夹名取人设名，
+ * 这样在网盘里一眼认得出谁是谁。人设允许重名（同一个人多个头像），
+ * 撞车的按头像文件名排序后给后来者加序号，保证同一批输入每次算出来一样。
+ */
+function buildPersonaIndex(directories) {
+    const byAvatar = {};
+    const toAvatar = {};
+    if (!directories) return { byAvatar, toAvatar };
+
+    const used = new Set();
+    const list = synthetic.listPersonas(directories)
+        .slice()
+        .sort((a, b) => String(a.value).localeCompare(String(b.value)));
+
+    for (const item of list) {
+        const raw = String(item.fullName || '').trim() || `未命名人设 ${stemOf(item.value)}`;
+        let folder = safeSegment(raw);
+        if (used.has(folder)) {
+            let n = 2;
+            while (used.has(`${folder} (${n})`)) n++;
+            folder = `${folder} (${n})`;
+        }
+        used.add(folder);
+        byAvatar[item.value] = folder;
+        toAvatar[folder] = item.value;
+    }
+
+    return { byAvatar, toAvatar };
+}
+
+/**
+ * API 配置索引：配置档 id ↔ 远端文件名（= 配置名）。
+ * 与人设同理，重名的按 id 排序后给后来者加序号。
+ */
+function buildProfileIndex(directories) {
+    const byId = {};
+    const toId = {};
+    if (!directories) return { byId, toId };
+
+    const used = new Set();
+    const list = synthetic.listApiProfiles(directories)
+        .slice()
+        .sort((a, b) => String(a.value).localeCompare(String(b.value)));
+
+    for (const item of list) {
+        const raw = String(item.label || '').trim() || String(item.value);
+        let name = safeSegment(raw);
+        if (used.has(name)) {
+            let n = 2;
+            while (used.has(`${name} (${n})`)) n++;
+            name = `${name} (${n})`;
+        }
+        used.add(name);
+        byId[item.value] = name;
+        toId[name] = item.value;
+    }
+
+    return { byId, toId };
+}
+
+/**
  * 由前端传来的 { avatar 文件名: 角色名 } 建索引。
  *
  * 同名角色会撞车（两张卡取了同一个名字），按 avatar 排序后给后来者加序号，
  * 保证同一批输入每次算出来的名字都一样，不会这次是原名下次变成带序号的。
+ *
+ * 人设名前端不知道（长在 settings.json 里），由后端就着 directories 自己读。
  */
-function buildNameIndex(characterNames = {}) {
+function buildNameIndex(characterNames = {}, directories = null) {
     const byAvatar = {};
     const byStem = {};
     const toAvatar = {};
@@ -139,7 +209,13 @@ function buildNameIndex(characterNames = {}) {
         toAvatar[name] = avatar;
     }
 
-    return { byAvatar, byStem, toAvatar };
+    return {
+        byAvatar,
+        byStem,
+        toAvatar,
+        personas: buildPersonaIndex(directories),
+        profiles: buildProfileIndex(directories),
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -163,6 +239,16 @@ function toRemote(localRel, names) {
 
     const [root, ...rest] = parts;
     if (!rest.length) return null;
+
+    // 一个人设一个文件夹：personas/沈知微.json → 用户人设/沈知微/persona.json
+    if (synthetic.isPersonaPath(localRel)) {
+        return [REMOTE_PERSONAS, synthetic.personaFolderOf(localRel), synthetic.PERSONA_FILE].join('/');
+    }
+
+    // 一个 API 配置一个文件：api-profiles/我的Claude.json → API配置/我的Claude.json
+    if (synthetic.isApiProfilePath(localRel)) {
+        return [REMOTE_API, `${synthetic.apiFolderOf(localRel)}.json`].join('/');
+    }
 
     switch (root) {
         case 'characters': {
@@ -191,10 +277,12 @@ function toRemote(localRel, names) {
         case 'worlds':
             return [REMOTE_WORLDS, ...rest.map(safeSegment)].join('/');
 
-        case 'User Avatars':
-            // 头像和 personas.json 平铺在同一个文件夹里。头像必是图片，
-            // 撞不上 personas.json 这个保留名
-            return [REMOTE_PERSONAS, ...rest.map(safeSegment)].join('/');
+        case 'User Avatars': {
+            // 头像跟着它的人设进同一个文件夹，网盘里一眼看得出这张脸是谁的。
+            // 本机认不出这个头像（settings.json 里没登记）时退回头像文件名当文件夹
+            const folder = names.personas?.byAvatar?.[rest[0]] || safeSegment(stemOf(rest[0]));
+            return [REMOTE_PERSONAS, folder, ...rest.map(safeSegment)].join('/');
+        }
 
         default: {
             // 预设与美化：第二层原样用酒馆的目录名，反向查表就能还原，不必转义
@@ -226,13 +314,25 @@ function toLocal(remoteRel, names) {
     const [top, ...rest] = parts;
 
     switch (top) {
-        case REMOTE_API:
-            return rest.length === 1 && rest[0] === API_PROFILES_FILE ? API_PROFILES_FILE : null;
+        case REMOTE_API: {
+            if (rest.length !== 1) return null;
+            // 旧布局是所有配置挤在 api-profiles.json 里，现在一档一个文件
+            if (rest[0] === API_PROFILES_FILE) return API_PROFILES_FILE;
+            if (!rest[0].toLowerCase().endsWith('.json')) return null;
+            return synthetic.apiLocalPath(rest[0].slice(0, -'.json'.length));
+        }
 
         case REMOTE_PERSONAS: {
-            if (rest.length !== 1) return null;
-            // 这个文件夹里只有两种东西：人设数据本身，和头像图片
-            return rest[0] === PERSONAS_FILE ? PERSONAS_FILE : `User Avatars/${rest[0]}`;
+            // 旧布局：用户人设/personas.json（所有人设挤在一份里）与平铺的头像图。
+            // 不再往上传，但网盘里已经有的还得读得回来
+            if (rest.length === 1) {
+                return rest[0] === PERSONAS_FILE ? PERSONAS_FILE : `User Avatars/${rest[0]}`;
+            }
+            // 新布局：用户人设/<人设名>/persona.json + 用户人设/<人设名>/<头像文件>
+            if (rest.length !== 2) return null;
+            return rest[1] === synthetic.PERSONA_FILE
+                ? synthetic.personaLocalPath(rest[0])
+                : `User Avatars/${rest[1]}`;
         }
 
         case REMOTE_CHARACTERS: {
@@ -297,8 +397,8 @@ function selectionHasStem(selection, stem) {
     return Array.isArray(selection.selected) && selection.selected.some(avatar => stemOf(avatar) === stem);
 }
 
-/** 本地相对路径是否在当前范围内。 */
-function inScope(localRel, scope) {
+/** 本地相对路径是否在当前范围内。names 只有人设用得上，缺了也不会误判成"全在范围内"。 */
+function inScope(localRel, scope, names) {
     const parts = String(localRel || '').split('/').filter(Boolean);
     if (!parts.length) return false;
 
@@ -307,6 +407,20 @@ function inScope(localRel, scope) {
         if (parts[0] === PERSONAS_FILE) return !selectionEmpty(scope.personas);
         if (parts[0] === API_PROFILES_FILE) return !selectionEmpty(scope.apiProfiles);
         return false;
+    }
+
+    // 一人一份的人设数据：勾了哪个人设就传哪份。
+    // 本机没有这个人设时（换台机器从云端往回拉）无从反查头像文件名，
+    // 只要人设这一类开着就放行 —— 不然新机器上永远拉不下来第一个人设
+    if (synthetic.isPersonaPath(localRel)) {
+        const avatar = names?.personas?.toAvatar?.[synthetic.personaFolderOf(localRel)];
+        return avatar ? selectionHas(scope.personas, avatar) : !selectionEmpty(scope.personas);
+    }
+
+    // API 配置同理，一档一份
+    if (synthetic.isApiProfilePath(localRel)) {
+        const id = names?.profiles?.toId?.[synthetic.apiFolderOf(localRel)];
+        return id ? selectionHas(scope.apiProfiles, id) : !selectionEmpty(scope.apiProfiles);
     }
 
     const [root, ...rest] = parts;
@@ -374,6 +488,8 @@ function inScope(localRel, scope) {
 function categoryOf(localRel) {
     const parts = String(localRel || '').split('/').filter(Boolean);
     if (!parts.length) return 'other';
+    if (synthetic.isPersonaPath(localRel)) return 'personas';
+    if (synthetic.isApiProfilePath(localRel)) return 'apiProfiles';
     if (parts.length === 1) {
         if (parts[0] === PERSONAS_FILE) return 'personas';
         if (parts[0] === API_PROFILES_FILE) return 'apiProfiles';
@@ -419,6 +535,9 @@ function localAbsPath(directories, localRel) {
 
     // 合成文件最终读写的都是 settings.json，指向它即可 ——
     // 上层的"这个路径能不能对应到酒馆目录"判断也就自然成立
+    if (synthetic.isPersonaPath(localRel) || synthetic.isApiProfilePath(localRel)) {
+        return path.join(directories.root, synthetic.SETTINGS_FILE);
+    }
     if (parts.length === 1) {
         return synthetic.isSynthetic(parts[0])
             ? path.join(directories.root, synthetic.SETTINGS_FILE)
@@ -501,6 +620,8 @@ module.exports = {
     safeSegment,
     stemOf,
     buildNameIndex,
+    buildPersonaIndex,
+    buildProfileIndex,
     toRemote,
     toLocal,
     inScope,
