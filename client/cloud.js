@@ -249,7 +249,8 @@ function foldPersonas(entries) {
     for (const item of entries) {
         const folder = personaFolderOf(item.remote);
         if (!folder) {
-            out.push(item);
+            // 旧布局的平铺文件。名字能自己认出来的就别摆文件名
+            out.push({ ...item, label: item.label || loosePersonaLabel(item.remote) });
             continue;
         }
         const group = folders.get(folder);
@@ -271,6 +272,20 @@ function foldPersonas(entries) {
     }
 
     return out;
+}
+
+/**
+ * 旧布局那些平铺在 用户人设/ 下的文件该显示成什么。
+ *
+ * 头像文件名是个时间戳，得靠后端翻译成人设名（item.label）；后端还是旧版时
+ * 那个字段是空的，至少别把 personas.json 这种文件名直接怼到用户脸上。
+ */
+function loosePersonaLabel(remote) {
+    const parts = String(remote).split('/');
+    if (parts.length === 2 && parts[1] === 'personas.json') {
+        return '全部人设（旧版布局，下载会一次合并进来）';
+    }
+    return '';
 }
 
 /**
