@@ -434,34 +434,33 @@
 
 .stcb-scope-popup .stcb-scope-btn {
     width: 100% !important;
-    min-height: 34px !important;
+    min-height: 30px !important;
     height: auto !important;
-    padding: 6px 8px !important;
+    /* 手机上六个按钮也要两两并排，横向余量本就紧张：
+       内边距压到刚好不贴边，省下的宽度留给类别名后面的数字 */
+    padding: 4px 3px !important;
     border: 1px solid var(--stcb-border);
-    font-size: 13px;
+    /* 通用 .menu_button 那条 nowrap 会让长标签横向撑破格子。
+       这里让它换行，grid 同一行的按钮本就等高，多出一行不会参差 */
+    white-space: normal !important;
+    word-break: break-word !important;
+    line-height: 1.25 !important;
+    font-size: 12.5px;
 }
 
-/* 已选中的类别：边框加粗高亮，一眼能看出这次备份包含什么 */
+.stcb-scope-popup .stcb-scope-btn span {
+    white-space: normal;
+    word-break: break-word;
+}
+
+/* 已选中的类别：边框加粗高亮，一眼能看出这次备份包含什么。
+   边框从 1px 变 2px 会吃掉 1px 内边距，这里补回去，免得选中时文字跳一下 */
 .stcb-scope-popup .stcb-scope-btn.is-selected {
     border-width: 2px;
     border-color: var(--stcb-accent);
+    padding: 3px 2px !important;
     color: color-mix(in srgb, var(--stcb-accent) 80%, var(--SmartThemeBodyColor));
     font-weight: 700;
-}
-
-.stcb-scope-note {
-    padding: 5px 7px;
-    border: 1px solid var(--stcb-border);
-    border-radius: 5px;
-    background: var(--stcb-surface);
-    font-size: 12px;
-    overflow-wrap: anywhere;
-}
-
-.stcb-scope-hint {
-    font-size: 11px;
-    line-height: 1.4;
-    color: var(--stcb-muted);
 }
 
 .stcb-scope-head {
@@ -643,7 +642,18 @@
         grid-template-columns: 1fr;
     }
 
+    /* 六个按钮在手机上仍保持两两并排 —— 单列要划半屏才看得完一遍类别。
+       换行由 .stcb-scope-btn 那条 white-space:normal 兜底，这里只管把宽度榨出来 */
+    .stcb-scope-popup .stcb-scope-btn {
+        padding: 4px 2px !important;
+        font-size: 11.5px;
+    }
+
+    .stcb-scope-popup .stcb-scope-btn.is-selected {
+        padding: 3px 1px !important;
+    }
+
     .stcb-scope-buttons {
-        grid-template-columns: 1fr;
+        gap: 4px;
     }
 }

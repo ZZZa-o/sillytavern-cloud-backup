@@ -15,7 +15,7 @@ import { Popup, POPUP_TYPE, POPUP_RESULT } from '/scripts/popup.js';
 import { api } from './api.js';
 import { characterEntries, worldEntries, currentAvatar, embeddedWorldNames } from './tavern.js';
 import {
-    getConfig, describeScope, scopeEnabled, selectionCount, selectionEmpty,
+    getConfig, scopeEnabled, selectionCount, selectionEmpty,
     getScopeDirs, dirSelection, ensureDirSelection, getChatCount, getSynthList,
     chatCountsSupplied, synthListsSupplied,
 } from './settings.js';
@@ -117,18 +117,6 @@ function popupHtml() {
                     <button type="button" class="menu_button stcb-scope-btn" data-kind="worlds"></button>
                     <button type="button" class="menu_button stcb-scope-btn" data-kind="apiProfiles"></button>
                 </div>
-                <div class="stcb-scope-note">当前已选择同步范围：<b data-role="note"></b></div>
-                <div class="stcb-scope-hint">
-                    角色卡点进去是文件夹，展开一张卡就能勾它名下的某几条聊天；
-                    「含聊天记录」一键把所选角色的聊天全带上，群聊与群组也跟着这个开关走。<br>
-                    用户人设备份的是人设名、描述与注入设置，连同头像一起。网盘上一个人设占一个文件夹（以人设名命名），
-                    下载时只动你勾的那个人设，本机其他人设不受影响。<br>
-                    预设与美化点进去按目录展开，可以勾到具体某个预设、某个主题。<br>
-                    背景图只备份你自己上传的，酒馆自带的那批风景图不会传。<br>
-                    世界书只列独立的那些；已内嵌在角色卡里的不会重复出现，跟着角色卡一起备份。<br>
-                    <b>API 配置</b>逐个勾选连接配置档，网盘上一档一个文件（以配置名命名），
-                    <b>会连它引用的 API 密钥明文与代理密码一起备份</b>；下载时只合并你勾的那一档，不动你的其他设置。
-                </div>
             </div>
 
             <div class="stcb-scope-view" data-view="picker" hidden>
@@ -181,7 +169,6 @@ export async function openScopePopup() {
             btn.classList.toggle('is-selected', !!enabled[kind]);
             btn.innerHTML = `<span>${escHtml(buttonLabel(kind, scope))}</span>`;
         }
-        pick('note').textContent = describeScope(scope);
     };
 
     const showRoot = () => {
@@ -654,6 +641,14 @@ export async function openScopePopup() {
         okButton: '确定',
         cancelButton: '取消',
         allowVerticalScrolling: true,
+        // 在某一类的明细列表里，「确定」「取消」（连同 Esc）都只是这一层的收工，
+        // 该退回六个按钮那一屏接着挑下一类 —— 一路弹回酒馆扩展页，
+        // 想选第二类就得从头再点一遍备份范围。返回 false 即取消关闭，show() 的 promise 不会兑现。
+        onClosing: () => {
+            if (!activeKind) return true;
+            showRoot();
+            return false;
+        },
     });
 
     const result = await popup.show();
@@ -677,41 +672,39 @@ function applySelection(selection, entries, chosen) {
 }
 
 function buttonLabel(kind, scope) {
+    // 一类都没有时按钮上只写类别名 —— 有没有东西点进去一眼就看得见，
+    // 「（无）」既占宽度又没多说什么
     switch (kind) {
         case 'characters': {
             const total = characterEntries().length;
-            if (!total) return '角色卡（无）';
+            if (!total) return '角色卡';
             const count = scope.characters.all ? total : scope.characters.selected.length;
             // 聊天记录长在这个菜单里，选中态也要在按钮上交代一句
             const chats = selectionEmpty(scope.chats) ? '' : ' + 聊天';
             if (!count) return '角色卡';
-            return scope.characters.all
-                ? `角色卡（全部 ${total}${chats}）`
-                : `角色卡（${count}${chats}）`;
+            // 全选与逐个勾满在按钮上一律写数字：「全部 12」和「12」说的是同一件事，
+            // 多出来的两个字在手机上会把两列按钮挤下去
+            return `角色卡（${count}${chats}）`;
         }
         case 'worlds': {
             const total = worldEntries().length;
-            // 全被角色卡内嵌时一本独立的都不剩，这时候说"全部 0"不如直说
-            if (!total) return '世界书（无独立世界书）';
-            if (scope.worlds.all) return `世界书（全部 ${total}）`;
-            const count = scope.worlds.selected.length;
+            if (!total) return '世界书';
+            const count = scope.worlds.all ? total : scope.worlds.selected.length;
             return count ? `世界书（${count}）` : '世界书';
         }
         case 'presets':
         case 'themes': {
             const label = kind === 'presets' ? '预设' : '美化';
             const { chosen, total } = groupTally(kind, scope);
-            if (!total) return `${label}（无）`;
-            if (chosen === total) return `${label}（全部 ${total}）`;
+            if (!total) return label;
             return chosen ? `${label}（${chosen}）` : label;
         }
         case 'personas':
         case 'apiProfiles': {
             const label = kind === 'personas' ? '用户人设' : 'API 配置';
             const total = getSynthList(kind).length;
-            if (!total) return `${label}（无）`;
-            if (scope[kind]?.all) return `${label}（全部 ${total}）`;
-            const count = scope[kind]?.selected?.length || 0;
+            if (!total) return label;
+            const count = scope[kind]?.all ? total : (scope[kind]?.selected?.length || 0);
             return count ? `${label}（${count}）` : label;
         }
         default:
