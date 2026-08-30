@@ -73,7 +73,7 @@ const NON_BACKUP_DIRS = [META_DIR];
 async function scanLocal(directories, scope, hashCache = {}, names = null) {
     const out = {};
     for (const root of paths.scanRoots(directories, scope)) {
-        await walkLocal(root.dir, root.prefix, out, hashCache, scope);
+        await walkLocal(root.dir, root.prefix, out, hashCache, scope, names);
     }
     // 合成文件每次都从 settings.json / secrets.json 现拼一遍再算哈希：
     // 源数据一改哈希就变，下次备份必然识别为需要更新。
@@ -92,7 +92,9 @@ async function scanLocal(directories, scope, hashCache = {}, names = null) {
     return out;
 }
 
-async function walkLocal(dir, prefix, out, hashCache, scope) {
+// names 必须传下去：头像的范围判定要靠它认出"这张脸本机有没有"，
+// 缺了的话本机已有的头像会全部走进 inScope 的兜底分支被误当成云端来的放行
+async function walkLocal(dir, prefix, out, hashCache, scope, names) {
     if (!fs.existsSync(dir)) return;
     const dirents = await fs.promises.readdir(dir, { withFileTypes: true });
     for (const dirent of dirents) {
@@ -101,11 +103,11 @@ async function walkLocal(dir, prefix, out, hashCache, scope) {
         const rel = `${prefix}/${dirent.name}`;
         const kind = entryKind(dir, dirent);
         if (kind === 'dir') {
-            await walkLocal(full, rel, out, hashCache, scope);
+            await walkLocal(full, rel, out, hashCache, scope, names);
             continue;
         }
         if (kind !== 'file') continue;
-        if (!paths.inScope(rel, scope)) continue;
+        if (!paths.inScope(rel, scope, names)) continue;
         await addLocalFile(full, rel, out, hashCache);
     }
 }

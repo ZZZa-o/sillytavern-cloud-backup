@@ -129,6 +129,15 @@ function listAvatarFiles(directories) {
     }
 }
 
+/** 某个头像文件在磁盘上是否真的存在。 */
+function hasAvatarFile(directories, avatar) {
+    try {
+        return fs.statSync(path.join(directories.avatars, avatar)).isFile();
+    } catch {
+        return false;
+    }
+}
+
 /**
  * 从 power_user.personas 的一个值里取出能显示的人设名。
  * 正常是字符串，但旧版本酒馆与别的插件写过对象形态，硬 String() 会变成
@@ -280,10 +289,23 @@ function mergePersona(directories, buffer) {
     if (name) power.personas[avatar] = name;
     else if (power.personas[avatar] === undefined) power.personas[avatar] = '';
 
-    if (incoming.description && typeof incoming.description === 'object') {
+    // 描述正常是个对象（description / position / depth / role / lorebook）。
+    // 旧版酒馆与部分迁移来的数据里它是纯字符串，原样丢掉会让人设只剩一个名字，
+    // 所以塞进对象的 description 字段，注入位置那几项沿用本机原有的
+    if (typeof incoming.description === 'string') {
+        const old = power.persona_descriptions[avatar];
+        power.persona_descriptions[avatar] = {
+            ...(old && typeof old === 'object' ? old : {}),
+            description: incoming.description,
+        };
+    } else if (incoming.description && typeof incoming.description === 'object') {
         power.persona_descriptions[avatar] = incoming.description;
     }
-    if (incoming.isDefault === true) power.default_persona = avatar;
+
+    // 头像可能还没落地（比如只合并了 persona.json），指过去酒馆开机就找不到这张脸
+    if (incoming.isDefault === true && hasAvatarFile(directories, avatar)) {
+        power.default_persona = avatar;
+    }
 
     writeJson(file, settings);
 

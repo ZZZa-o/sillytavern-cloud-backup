@@ -55,6 +55,21 @@ const ALL_SCOPE = {
 
 const scopeWith = patch => ({ ...ALL_SCOPE, ...patch });
 
+/**
+ * 本机认识哪些人设（头像文件名 → 人设名）。
+ * 判定头像在不在范围内要靠它认出"这张脸本机有没有" —— 本机没有的只可能来自云端。
+ */
+const namesWithPersonas = byAvatar => ({
+    ...paths.buildNameIndex({}),
+    personas: {
+        byAvatar,
+        toAvatar: Object.fromEntries(Object.entries(byAvatar).map(([avatar, name]) => [name, avatar])),
+    },
+});
+
+// 本机有两个人设，两张脸都认识
+const LOCAL_PERSONAS = namesWithPersonas({ 'mine.png': '我', '别人的.png': '别人' });
+
 /** 预设/美化：只改其中一个目录，其余保持全选。 */
 const dirScope = (group, key, selection) => scopeWith({
     [group]: { ...ALL_SCOPE[group], [key]: selection },
@@ -268,9 +283,29 @@ test('人设与 API 配置各自按项勾选', () => {
         apiProfiles: { all: false, selected: [] },
     });
     assert.strictEqual(paths.inScope('personas.json', only), true, '选了人设就要传人设数据');
-    assert.strictEqual(paths.inScope('User Avatars/mine.png', only), true);
-    assert.strictEqual(paths.inScope('User Avatars/别人的.png', only), false);
+    assert.strictEqual(paths.inScope('User Avatars/mine.png', only, LOCAL_PERSONAS), true);
+    assert.strictEqual(paths.inScope('User Avatars/别人的.png', only, LOCAL_PERSONAS), false,
+        '本机认识这张脸，没勾就是没勾');
     assert.strictEqual(paths.inScope('api-profiles.json', only), false, '一个配置档都没勾');
+});
+
+test('云端来的新人设，脸与名字必须一起进范围', () => {
+    // 本机只有 mine.png 一个人设，盛茵兰那张脸本机从没见过 ——
+    // 选择集里列的都是本机的头像文件名，不可能含有它
+    const only = scopeWith({ personas: { all: false, selected: ['mine.png'] } });
+    const localOnly = namesWithPersonas({ 'mine.png': '我' });
+
+    assert.strictEqual(paths.inScope('personas/盛茵兰.json', only, localOnly), true);
+    assert.strictEqual(paths.inScope('User Avatars/1779935884877-.png', only, localOnly), true,
+        '两半必须同进同出：只放行名字会落地一个没有脸的人设，只放行脸会被酒馆登记成 [Unnamed Persona]');
+});
+
+test('人设一个都没勾时，云端的脸也进不来', () => {
+    const none = scopeWith({ personas: { all: false, selected: [] } });
+    const localOnly = namesWithPersonas({ 'mine.png': '我' });
+
+    assert.strictEqual(paths.inScope('personas/盛茵兰.json', none, localOnly), false);
+    assert.strictEqual(paths.inScope('User Avatars/1779935884877-.png', none, localOnly), false);
 });
 
 test('范围之外的路径一律拒绝', () => {

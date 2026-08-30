@@ -462,8 +462,12 @@ function inScope(localRel, scope, names) {
         }
 
         case 'User Avatars':
-            // 头像跟着人设走：勾了哪个人设就传哪个头像
-            return selectionHas(scope.personas, rest[0]);
+            // 头像跟着人设走：勾了哪个人设就传哪个头像。
+            // 本机还不认识这张脸时（那它只可能来自云端），与上面的 persona.json 同样兜底 ——
+            // 一个人设的两半若走不同判据就永远配不上对：脸落了地而名字没跟上，酒馆的
+            // addMissingPersonas 会把它登记成 [Unnamed Persona] 并存盘，反过来则是有名字没有脸
+            return selectionHas(scope.personas, rest[0])
+                || (!names?.personas?.byAvatar?.[rest[0]] && !selectionEmpty(scope.personas));
 
         default: {
             // 预设与美化：每个目录各持一份文件级选择集，按目录内相对路径判定
