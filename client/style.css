@@ -53,6 +53,35 @@
     color: color-mix(in srgb, var(--stcb-danger) 84%, var(--SmartThemeBodyColor));
 }
 
+/* 「开了加密却没填口令」这一态：不是错误，但放着不管连不上，得比灰色显眼 */
+.stcb-pill.is-warn {
+    border-color: color-mix(in srgb, var(--stcb-warn) 55%, transparent);
+    color: color-mix(in srgb, var(--stcb-warn) 84%, var(--SmartThemeBodyColor));
+}
+
+/* 加密：复选框单独一行，勾上后底下才展开口令框与那段不可逆警告 */
+.stcb-encrypt-row {
+    flex: 1 1 100%;
+    margin-top: 6px;
+}
+
+.stcb-encrypt-fields {
+    flex: 1 1 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.stcb-encrypt-fields[hidden] {
+    display: none;
+}
+
+/* 提高特异性压过 .stcb-meta 的灰色，警告语得让人真的看见 */
+.stcb-meta.stcb-encrypt-warn {
+    color: color-mix(in srgb, var(--stcb-warn) 85%, var(--SmartThemeBodyColor));
+}
+
 .stcb-section {
     border-top: 1px solid var(--stcb-border);
     display: flex;
@@ -117,9 +146,68 @@
     gap: 4px 5px;
 }
 
+/*
+ * 按钮行靠右，但仍和小标题待在同一行。
+ *
+ * 用 margin-left:auto 而不是 flex:1 1 100% + justify-content —— 后者会把这一行
+ * 撑满整个宽度，于是标题被挤到上一行去。auto 外边距只是把这一小块推到右边，
+ * 宽度还是按内容算，标题照旧留在左边。
+ */
 .stcb-actions {
     margin-top: 2px;
     gap: 3px;
+    margin-left: auto;
+}
+
+/*
+ * 云端文件的按钮工具条。
+ *
+ * 两组按钮必须当成一个整体推到右边 —— margin-left:auto 会吸收掉一行里的全部
+ * 剩余空间，要是直接加在第一组上，第二组就会被顶出这一行去（哪怕宽度绰绰有余）。
+ * 包一层之后 auto 加在容器上，宽屏五个按钮排成一行跟标题并排；
+ * 窄到放不下时在容器内部换行，justify-content 让两行都贴右。
+ *
+ * 容器本身不设 flex-basis：宽度随内容走，放得下就不换行。
+ */
+.stcb-cloud-toolbar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 3px;
+    margin-left: auto;
+    margin-top: 2px;
+    min-width: 0;
+}
+
+/* 组内不许拆散，这样断点只可能落在 3 和 2 之间 */
+.stcb-cloud-toolbar .stcb-actions {
+    margin-left: 0;
+    margin-top: 0;
+    flex-wrap: nowrap;
+}
+
+/* 方案行：下拉框吃掉剩余宽度，新建/重命名/删除挨着右边 */
+.stcb-profile-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px 6px;
+    flex: 1 1 100%;
+}
+
+.stcb-profile-field {
+    flex: 1 1 140px;
+    min-width: 120px;
+}
+
+.stcb-profile-field select {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.stcb-profile-row .stcb-actions {
+    margin-top: 0;
 }
 
 .stcb-shell .checkbox_label {
@@ -655,5 +743,44 @@
 
     .stcb-scope-buttons {
         gap: 4px;
+    }
+
+    /*
+     * 窄屏拆成 3 + 2，且第一组要跟标题同行。
+     *
+     * 关键是 display:contents —— 包裹层在布局上消失，两组按钮升级成 section
+     * 的直接子元素，于是各自独立换行。留着包裹层的话它是个整体，
+     * 要么整块跟标题同行、要么整块掉到下一行，做不到"一半留在标题行"。
+     */
+    .stcb-cloud-toolbar {
+        display: contents;
+    }
+
+    .stcb-cloud-toolbar .stcb-actions {
+        margin-top: 2px;
+    }
+
+    /* 刷新/下载/删除：贴着标题那一行的右端 */
+    .stcb-cloud-toolbar .stcb-actions:first-child {
+        margin-left: auto;
+    }
+
+    /* 按路径/当前：独占第二行，同样靠右 */
+    .stcb-cloud-toolbar .stcb-actions:last-child {
+        flex: 1 1 100%;
+        justify-content: flex-end;
+        margin-left: 0;
+    }
+
+    /* 窄屏把按钮榨窄些，保证第一行三个仍挤得进标题右边 */
+    .stcb-cloud-actions .menu_button {
+        padding-left: 6px !important;
+        padding-right: 6px !important;
+        font-size: 11.5px;
+    }
+
+    /* 方案行窄屏换行：下拉框独占一行，三个按钮整体靠右 */
+    .stcb-profile-field {
+        flex: 1 1 100%;
     }
 }

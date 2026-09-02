@@ -72,10 +72,21 @@ async function scopeFor(config, directories) {
     };
 }
 
+/**
+ * 连接信息 + 加密密钥。
+ *
+ * 任何真正读写云端的路由都必须走它，而不是直接用 resolveConfig —— prepareCrypto
+ * 会在这里验证口令，验不过就抛错。这一步的位置很关键：它发生在任何本地磁盘写入
+ * 之前，所以口令输错的最坏结果只是一句报错，而不是把解不开的密文糊到角色卡目录上。
+ */
+async function connectionFor(request) {
+    return backup.prepareCrypto(configStore.resolveConfig(request.user.directories));
+}
+
 /** 连接信息用配置里的，范围用注入过排除名单的。 */
 async function configFor(request) {
     const directories = request.user.directories;
-    const config = configStore.resolveConfig(directories);
+    const config = await connectionFor(request);
     return { ...config, scope: await scopeFor(config, directories) };
 }
 
@@ -98,7 +109,14 @@ function init(router) {
             helper: true,
             hasPassword: !!config.password,
             configured: !!config.url,
-            lastBackupAt: state.lastBackupAt || config.lastBackupAt || '',
+            // 当前方案的加密状态。口令本身不回传，只说开没开、存没存
+            encryption: {
+                enabled: !!config.encryption?.enabled,
+                hasPassphrase: !!config.encryption?.passphrase,
+            },
+            // 配置里的时间记在当前方案上，各方案各算各的；scan-cache 里那份是全局的，
+            // 换方案不会重置，只能当老配置的兜底用
+            lastBackupAt: config.lastBackupAt || state.lastBackupAt || '',
             // 范围弹窗要用：预设与美化各有哪些目录、各有多少文件多大
             scopeDirs: backup.scopeDirStats(request.user.directories),
             // 角色卡文件夹标题上的「N 条聊天」。明细走 chats/list 按需拿
@@ -124,18 +142,35 @@ function init(router) {
         return { config: configStore.publicConfig(saved), scopeText: paths.describeScope(saved.scope) };
     }));
 
+    /**
+     * 测试连接。开了加密的话顺带跑一次真实的加密往返 —— 传上去再读回来比对，
+     * 这是用户唯一能主动确认「加密确实在工作」的入口，光验证可读写还不够。
+     */
     router.post('/test', (request, response) => handle(response, async () => {
-        const config = configStore.resolveConfig(request.user.directories);
-        await webdav.ensureRoot(config);
+        const config = await connectionFor(request);
         const marker = `.sillytavern-cloud-backup-test-${Date.now()}.txt`;
-        const body = Buffer.from(`SillyTavern WebDAV test ${new Date().toISOString()}\n`, 'utf8');
+        const text = `SillyTavern WebDAV test ${new Date().toISOString()}\n`;
+        const body = Buffer.from(text, 'utf8');
         await webdav.putBuffer(config, [marker], body, 'text/plain; charset=utf-8');
+
+        let roundTrip = '';
+        if (config.cryptoKey) {
+            // 读回来必须与原文逐字节相同。不同就说明加解密链路有问题，
+            // 这时候绝不能让用户以为一切正常然后把真实数据传上去
+            const back = await webdav.getBuffer(config, [marker]);
+            if (!back.equals(body)) {
+                await webdav.remove(config, [marker]).catch(() => {});
+                throw new Error('加密自检失败：测试文件读回后与原文不一致，请勿在此方案下上传数据。');
+            }
+            roundTrip = '，加密往返自检通过';
+        }
+
         try {
             await webdav.remove(config, [marker]);
         } catch (error) {
-            return { message: `连接可用，测试文件已上传；删除测试文件失败：${error.message}` };
+            return { message: `连接可用，测试文件已上传${roundTrip}；删除测试文件失败：${error.message}` };
         }
-        return { message: '连接可用，远端目录可读写。' };
+        return { message: `连接可用，远端目录可读写${roundTrip}。` };
     }));
 
     // ---- 备份 ----
@@ -170,17 +205,17 @@ function init(router) {
     // ---- 云端文件管理 ----
 
     router.post('/cloud/list', (request, response) => handle(response, async () => {
-        const config = configStore.resolveConfig(request.user.directories);
+        const config = await connectionFor(request);
         return { items: await cloud.list(config, readNames(request), request.user) };
     }));
 
     router.post('/cloud/download', (request, response) => handle(response, async () => {
-        const config = configStore.resolveConfig(request.user.directories);
+        const config = await connectionFor(request);
         return await cloud.download(request.user, config, readNames(request), readPaths(request));
     }));
 
     router.post('/cloud/delete', (request, response) => handle(response, async () => {
-        const config = configStore.resolveConfig(request.user.directories);
+        const config = await connectionFor(request);
         return await cloud.remove(request.user, config, readNames(request), readPaths(request));
     }));
 }

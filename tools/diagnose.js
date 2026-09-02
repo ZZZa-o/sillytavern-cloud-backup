@@ -58,6 +58,18 @@ function mask(value) {
     return `${text.slice(0, 2)}***${text.slice(-2)}（长度 ${text.length}）`;
 }
 
+/**
+ * 加密状态。口令只报长度不报内容 —— 诊断输出是会被贴到 issue 里的东西。
+ *
+ * 「开了但没口令」要特别点出来：后端会直接拒绝连接（resolveConfig 里拦着），
+ * 而用户看到的只是一句连不上，未必想得到是这个原因。
+ */
+function describeEncryption(encryption) {
+    if (!encryption?.enabled) return '未开启';
+    if (!encryption.passphrase) return '已开启，但没有口令【连接会被拒绝】';
+    return `已开启，口令 ${mask(encryption.passphrase)}`;
+}
+
 // ---------------------------------------------------------------------------
 
 const ST_ROOT = findTavernRoot();
@@ -253,9 +265,28 @@ if (!fs.existsSync(configFile)) {
 } else {
     try {
         const config = JSON.parse(fs.readFileSync(configFile, 'utf8'));
-        console.log('WebDAV 地址 :', config.url || '(空)');
-        console.log('用户名      :', config.username ? mask(config.username) : '(空)');
-        console.log('密码        :', config.password ? mask(config.password) : '(空)');
+
+        // 连接信息按方案分组存。老配置还摊在顶层，当成一条无名方案照样列出来
+        const profiles = Array.isArray(config.profiles) && config.profiles.length
+            ? config.profiles
+            : [{ id: '(旧格式)', name: '(顶层)', ...config }];
+        console.log(`方案        : ${profiles.length} 个，当前 ${config.activeProfileId || '(未记录)'}`);
+        for (const profile of profiles) {
+            const active = profile.id === config.activeProfileId ? ' ←当前' : '';
+            console.log(`  [${profile.id}] ${profile.name || '(无名)'}${active}`);
+            console.log('    地址    :', profile.url || '(空)');
+            console.log('    用户名  :', profile.username ? mask(profile.username) : '(空)');
+            console.log('    密码    :', profile.password ? mask(profile.password) : '(空)');
+            console.log('    远端目录:', profile.remotePath || '(空)');
+            console.log('    加密    :', describeEncryption(profile.encryption));
+            console.log('    上次备份:', profile.lastBackupAt || '(无)');
+        }
+
+        console.log('自动上传间隔:', config.auto?.intervalMinutes !== undefined
+            ? `${config.auto.intervalMinutes} 分钟`
+            : (config.auto?.intervalHours !== undefined
+                ? `${config.auto.intervalHours} 小时【旧字段，后端会折算成分钟】`
+                : '(未记录)'));
         console.log('scope 各类键:', Object.keys(config.scope || {}).join(', '));
         const shape = key => JSON.stringify(config.scope?.[key]);
         console.log('  chats     :', shape('chats'));

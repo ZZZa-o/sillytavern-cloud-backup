@@ -13,6 +13,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 
 const webdav = require('./webdav.js');
+const encryption = require('./encryption.js');
 const paths = require('./paths.js');
 const builtin = require('./builtin.js');
 const synthetic = require('./synthetic.js');
@@ -59,7 +60,74 @@ function entryKind(parent, dirent) {
 const META_DIR = '.st-sync';
 const INDEX_NAME = 'index.json';
 const LOCK_NAME = 'lock.json';
+const KEYCHECK_NAME = 'keycheck.json';
 const NON_BACKUP_DIRS = [META_DIR];
+
+// ---------------------------------------------------------------------------
+// 加密准备
+//
+// 任何真正读写云端的操作之前都要先过这里。它做两件事：拿到能用的主密钥，
+// 以及在口令不对时把整个操作拦下来。
+//
+// 拦截这一步是整套加密里最要紧的：口令错了如果放过去，「从云端下载」会把一堆
+// 解不开的字节直接覆盖到角色卡目录上，本地数据当场就毁了。所以校验必须发生在
+// 任何磁盘写入之前，而且失败就是抛错，没有「尽力而为」这个选项。
+// ---------------------------------------------------------------------------
+
+// scrypt 一次约 100ms。云端列表刷新得挺勤，每次都重跑没必要，
+// 按「口令指纹」缓存住 —— 键里带口令的哈希，改了口令自然就不命中了
+const keyCache = new Map();
+
+function cacheKeyFor(config) {
+    const seed = `${config.url}|${config.remotePath}|${config.encryption.passphrase}`;
+    return crypto.createHash('sha256').update(seed).digest('hex');
+}
+
+async function readKeycheck(config) {
+    return webdav.readRawJson(config, [META_DIR, KEYCHECK_NAME], null);
+}
+
+/**
+ * 返回一份挂好 cryptoKey 的 config 副本。未开启加密时 cryptoKey 为 null，
+ * webdav.js 那边就走明文路径，行为与加这个功能之前完全一致。
+ */
+async function prepareCrypto(config) {
+    const enabled = !!config.encryption?.enabled;
+    await webdav.ensureRoot(config);
+    const existing = await readKeycheck(config);
+
+    if (!enabled) {
+        // 云端是个加密仓库，本方案却没开加密。放过去的话，读到的全是密文，
+        // 「预览变更」会把每个文件都算成需要下载，然后把密文糊到本地
+        if (existing) {
+            throw new Error(
+                '这个云端目录里的文件是加密的，但当前方案没有开启加密。'
+                + '请在面板里勾选「加密上传的文件」并填入当初设置的口令。',
+            );
+        }
+        return { ...config, cryptoKey: null };
+    }
+
+    const cacheId = cacheKeyFor(config);
+    if (existing) {
+        const cached = keyCache.get(cacheId);
+        if (cached) return { ...config, cryptoKey: cached };
+
+        const verdict = encryption.verifyKeycheck(existing, config.encryption.passphrase);
+        if (!verdict.ok) throw new Error(verdict.reason);
+        keyCache.set(cacheId, verdict.key);
+        return { ...config, cryptoKey: verdict.key };
+    }
+
+    // 首次在这个云端目录启用加密：生成 salt 并把 keycheck 落上去。
+    // 必须先写成功再返回 —— 万一写失败就返回密钥，文件加密传上去了却没有
+    // 校验文件，换台设备就再也验不了口令
+    const created = encryption.createKeycheck(config.encryption.passphrase);
+    await webdav.ensureDir(config, [META_DIR], new Set());
+    await webdav.writeRawJson(config, [META_DIR, KEYCHECK_NAME], created.keycheck);
+    keyCache.set(cacheId, created.key);
+    return { ...config, cryptoKey: created.key };
+}
 
 // ---------------------------------------------------------------------------
 // 本地扫描
@@ -217,6 +285,21 @@ function buildPlan(context) {
     }
 
     return plan;
+}
+
+/**
+ * 云端还剩多少个文件是加密之前传上去的明文。
+ *
+ * 开启加密不会自动重传存量文件 —— 内容没变，哈希也就没变，比对时算作 unchanged，
+ * 这是有意为之（一次性重传全部数据不该由一个复选框悄悄触发）。所以要把这个数字
+ * 显式报给用户，让他知道云端还留着什么。
+ *
+ * 只数索引里明确记着 enc 为假的。没有 enc 字段的是本次改动之前的老索引，
+ * 那时候压根没有加密，同样算明文
+ */
+function countPlaintext(remoteIndex, cryptoKey) {
+    if (!cryptoKey) return 0;
+    return Object.values(remoteIndex).filter(entry => !entry?.enc).length;
 }
 
 /** 压成前端可直接渲染的结构，长列表截断以免响应过大。 */
@@ -392,6 +475,10 @@ async function runUpload(user, config, names) {
                     remote: remoteRel,
                     device,
                     at: new Date().toISOString(),
+                    // 记下这一份是明文还是密文、是哪把钥匙加的。用户中途开启加密时，
+                    // 靠它算出云端还剩多少明文文件（见 countPlaintext）
+                    enc: !!config.cryptoKey,
+                    keyId: config.cryptoKey ? encryption.keyIdOf(config.cryptoKey) : '',
                 };
                 // 合成文件没有稳定的 mtime 可比，不进哈希缓存
                 if (!isSynthetic) {
@@ -408,6 +495,7 @@ async function runUpload(user, config, names) {
         await releaseLock(config, device);
     }
 
+    result.plaintextRemaining = countPlaintext(remoteIndex, config.cryptoKey);
     return finish(directories, device, cache, result, 'upload');
 }
 
@@ -481,9 +569,13 @@ function finish(directories, device, cache, result, direction) {
     return result;
 }
 
-/** 只比对不执行。 */
+/** 只比对不执行。顺带报一下云端还剩多少明文，让用户在真正上传前就看得到。 */
 async function planOnly(user, config, names) {
-    return summarizePlan(buildPlan(await collectContext(user, config, names)));
+    const context = await collectContext(user, config, names);
+    return {
+        ...summarizePlan(buildPlan(context)),
+        plaintextRemaining: countPlaintext(context.remoteIndex, config.cryptoKey),
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -618,6 +710,7 @@ function scopeDirStats(directories) {
 module.exports = {
     META_DIR,
     INDEX_NAME,
+    KEYCHECK_NAME,
     NON_BACKUP_DIRS,
     sha256,
     timestampForFile,
@@ -629,6 +722,7 @@ module.exports = {
     remoteToLocalMap,
     resolveDevice,
     collectContext,
+    prepareCrypto,
     planOnly,
     scopeDirStats,
     chatCounts,
@@ -640,4 +734,5 @@ module.exports = {
     // 纯函数，供单元测试
     buildPlan,
     summarizePlan,
+    countPlaintext,
 };

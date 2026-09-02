@@ -1,6 +1,6 @@
 {
     "name": "sillytavern-cloud-backup",
-    "version": "3.0.0",
+    "version": "3.1.0",
     "description": "Back up SillyTavern characters, chats, worlds, presets, themes, and settings to WebDAV.",
     "type": "commonjs",
     "main": "server/index.js",
@@ -10,6 +10,6 @@
         "url": "https://github.com/ZZZa-o/sillytavern-cloud-backup.git"
     },
     "scripts": {
-        "test": "node tools/backup-logic-test.js && node tools/synthetic-test.js && node tools/card-book-test.js"
+        "test": "node tools/backup-logic-test.js && node tools/synthetic-test.js && node tools/card-book-test.js && node tools/config-profile-test.js && node tools/encryption-test.js && node tools/flush-guard-test.mjs"
     }
 }

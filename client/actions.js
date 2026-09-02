@@ -1,10 +1,14 @@
 /** 全部动作：保存配置、测试连接、预览、上传、下载、自动执行。 */
 import { api, apiWithNames } from './api.js';
-import { getConfig, loadConfig, pushConfig, describeScope, setScopeDirs, setChatCounts, setSynthLists } from './settings.js';
+import {
+    getConfig, loadConfig, pushConfig, describeScope, setScopeDirs, setChatCounts, setSynthLists,
+    addProfile, renameProfile, removeProfile, setActiveProfile, activeProfile,
+    MIN_INTERVAL_MINUTES, DEFAULT_INTERVAL_MINUTES,
+} from './settings.js';
 import {
     escHtml,
     setStatus, notify, setReport, withBusy, isBusy,
-    fillForm, renderPasswordState, renderScopeText, renderLastBackup, readFormIntoConfig,
+    fillForm, renderPasswordState, renderEncryptState, renderScopeText, renderLastBackup, readFormIntoConfig,
 } from './panel.js';
 import { openScopePopup } from './scope.js';
 import { setEmbeddedBooks } from './tavern.js';
@@ -20,6 +24,7 @@ export async function checkHelper() {
         const data = await api('status');
         $('#stcb-helper-status').removeClass('is-muted is-error').addClass('is-ok').text('后端已连接');
         renderPasswordState(!!data.hasPassword);
+        renderEncryptState(data.encryption);
         renderLastBackup(data.lastBackupAt);
         setScopeDirs(data.scopeDirs);
         setChatCounts(data.chatCounts);
@@ -58,17 +63,121 @@ export async function refreshEmbeddedBooks() {
     }
 }
 
+/**
+ * 保存配置。
+ *
+ * 首次开启加密时拦一道确认 —— 口令丢了云端数据就真的回不来了，没有找回渠道，
+ * 这件事必须让用户在点下去之前看到一次。已经开着的方案再保存就不再打扰。
+ */
 export async function saveConfig() {
+    const before = getConfig().encryption || {};
+    const wasEnabled = !!before.enabled;
     readFormIntoConfig();
     const password = $('#stcb-password').val()?.toString() ?? '';
+    const passphrase = $('#stcb-passphrase').val()?.toString() ?? '';
+    const nowEnabled = !!getConfig().encryption?.enabled;
+
+    if (nowEnabled && !passphrase && !before.hasPassphrase) {
+        setStatus('已勾选加密，但还没有填写加密口令。', 'error');
+        return;
+    }
+
+    if (nowEnabled && !wasEnabled) {
+        const ok = confirm(
+            '开启加密后，上传到网盘的文件将无法在网盘网页端直接打开，只能通过本插件取回。\n\n'
+            + '加密口令丢失后，云端数据无法恢复——没有任何找回渠道。\n'
+            + '在其他设备上同步时，必须填写完全相同的口令。\n\n'
+            + '确定开启吗？',
+        );
+        if (!ok) {
+            // 用户反悔了，把勾去掉再重画，免得界面停在"看起来开着"的状态
+            getConfig().encryption.enabled = false;
+            fillForm();
+            setStatus('已取消，加密未开启。', 'info');
+            return;
+        }
+    }
 
     await withBusy('正在保存配置...', async () => {
-        await pushConfig(password);
+        await pushConfig(password, { passphrase });
         fillForm();
         autoTimer();
         setStatus(`配置已保存。当前范围：${describeScope()}`, 'ok');
         notify('success', 'WebDAV 配置已保存');
     }, '保存配置失败。');
+}
+
+// ---------------------------------------------------------------------------
+// 方案：一套连接信息一条。范围与自动上传是全局的，不跟着方案走
+// ---------------------------------------------------------------------------
+
+/**
+ * 切换方案。
+ *
+ * 先把表单上的改动写回原方案再切，否则用户刚改完地址就换方案，那几笔就丢了。
+ * 切完立刻落盘 —— 用户的心理模型是"选中即生效"，不该再逼他点一次保存配置。
+ */
+export async function switchProfile(id) {
+    readFormIntoConfig();
+    if (!setActiveProfile(id)) return;
+
+    await withBusy('正在切换方案...', async () => {
+        await pushConfig();
+        fillForm();
+        autoTimer();
+        setStatus(`已切换到方案「${activeProfile().name}」。`, 'ok');
+        await refreshCloud(false);
+    }, '切换方案失败。');
+}
+
+export async function createProfile() {
+    const name = prompt('新方案的名字：', '新方案');
+    if (name === null) return;
+
+    readFormIntoConfig();
+    addProfile(name.trim());
+
+    await withBusy('正在新建方案...', async () => {
+        await pushConfig();
+        fillForm();
+        setStatus('方案已新建。填好地址与密码后点「保存配置」。', 'ok');
+    }, '新建方案失败。');
+}
+
+export async function renameActiveProfile() {
+    const profile = activeProfile();
+    const name = prompt('方案改叫：', profile.name);
+    if (name === null || !name.trim()) return;
+
+    readFormIntoConfig();
+    renameProfile(profile.id, name.trim());
+
+    await withBusy('正在重命名...', async () => {
+        await pushConfig();
+        fillForm();
+        setStatus(`方案已改名为「${activeProfile().name}」。`, 'ok');
+    }, '重命名失败。');
+}
+
+/** 只删本地这条连接配置，云端文件一个都不动。 */
+export async function deleteActiveProfile() {
+    const profile = activeProfile();
+    if (getConfig().profiles.length <= 1) {
+        setStatus('至少要保留一个方案。', 'warn');
+        return;
+    }
+    if (!confirm(`删除方案「${profile.name}」？\n\n只删本机保存的地址与密码，云端文件不受影响。`)) return;
+
+    readFormIntoConfig();
+    removeProfile(profile.id);
+
+    await withBusy('正在删除方案...', async () => {
+        await pushConfig();
+        fillForm();
+        autoTimer();
+        setStatus(`方案已删除，当前为「${activeProfile().name}」。`, 'ok');
+        await refreshCloud(false);
+    }, '删除方案失败。');
 }
 
 export async function testConnection() {
@@ -121,6 +230,19 @@ function planLines(entries) {
         `${escHtml(item.path)}<br><small>${escHtml(REASON_LABELS[item.reason] || item.reason)}</small>`);
 }
 
+/**
+ * 「云端还剩 N 个明文」的提示。
+ *
+ * 开启加密不会自动重传存量文件——内容没变哈希也没变，比对时算作相同，这是有意为之：
+ * 一次性重传全部数据不该由一个复选框悄悄触发。但用户得知道云端还留着什么，
+ * 否则他会以为勾上开关就万事大吉了。
+ */
+function plaintextNotice(count) {
+    if (!Number(count)) return '';
+    return `<div class="stcb-meta stcb-encrypt-warn">云端还有 <b>${Number(count)}</b> 个文件是开启加密前上传的明文。`
+        + '它们不会被自动替换。要全部转成密文，请在「云端文件」里删掉它们，再上传一次。</div>';
+}
+
 export async function previewBackup() {
     await withBusy('正在比对两端差异...', async () => {
         const data = await apiWithNames('backup/plan');
@@ -129,7 +251,8 @@ export async function previewBackup() {
 
         if (!counts.upload && !counts.download) {
             setReport(`<div class="stcb-meta">范围：${escHtml(data.scopeText || describeScope())}<br>`
-                + `两端已经一致，无需变更（${counts.unchanged || 0} 个文件相同）。</div>`);
+                + `两端已经一致，无需变更（${counts.unchanged || 0} 个文件相同）。</div>`
+                + plaintextNotice(plan.plaintextRemaining));
             setStatus('比对完成：两端已一致。', 'ok');
             return;
         }
@@ -142,7 +265,8 @@ export async function previewBackup() {
             + `（相同 ${counts.unchanged || 0}）<br>`
             + `两端内容不同的文件会同时出现在上下两个清单里，按你点哪个按钮决定以谁为准。</div>`
             + blocks.join('')
-            + (plan.truncated ? '<div class="stcb-meta">列表仅显示前 40 项。</div>' : ''));
+            + (plan.truncated ? '<div class="stcb-meta">列表仅显示前 40 项。</div>' : '')
+            + plaintextNotice(plan.plaintextRemaining));
 
         setStatus(`比对完成：可上传 ${counts.upload || 0} 项，可下载 ${counts.download || 0} 项。`, 'ok');
     }, '比对失败。');
@@ -164,7 +288,8 @@ function renderResult(data, title) {
 
     setReport(`<div class="stcb-meta">${escHtml(title)}</div>`
         + `<div class="stcb-statusline">${pills || pill('无变化', '')}</div>`
-        + errors);
+        + errors
+        + plaintextNotice(data.plaintextRemaining));
 }
 
 export async function runUpload(reason = 'manual') {
@@ -228,15 +353,23 @@ const EVENT_DEBOUNCE_MS = 5000;
 let timer = null;
 let debounceTimer = null;
 let lastAutoAt = 0;
+let generating = false;
+
+/** 酒馆开始/结束生成时由 index.js 通知。 */
+export function setGenerating(value) {
+    generating = !!value;
+}
 
 function intervalMs() {
-    const hours = Math.max(0.25, Number(getConfig().auto.intervalHours) || 6);
-    return hours * 60 * 60 * 1000;
+    return Math.max(MIN_INTERVAL_MINUTES, Number(getConfig().auto.intervalMinutes) || DEFAULT_INTERVAL_MINUTES) * 60 * 1000;
 }
 
 export async function autoMaybeRun(reason) {
     const c = getConfig();
     if (!c.auto.enabled || isBusy() || !c.url) return;
+    // 生成中不传：这会儿磁盘上的 .jsonl 可能是半截回复，或者还停在上一轮。
+    // 注意别在这里推进 lastAutoAt —— 那样生成结束后还得空等一整个间隔
+    if (generating) return;
     if (Date.now() - lastAutoAt < intervalMs()) return;
     lastAutoAt = Date.now();
     await runUpload(reason);

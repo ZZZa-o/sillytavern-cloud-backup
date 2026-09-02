@@ -1,14 +1,27 @@
 /**
  * 前端持有的配置副本。真身在后端的 config.json —— 密码只进不出，
  * 这里永远拿不到明文，只知道 hasPassword。
+ *
+ * 连接信息按「方案」分组（profiles），一套方案就是一个网盘账号；
+ * 备份范围与自动上传是全局的，换方案不跟着变。顶层的 url / username /
+ * remotePath / hasPassword / lastBackupAt 是当前方案的投影，方便面板直接取，
+ * 权威值在 profiles 里 —— 改这几个字段要走 setActiveFields。
  */
 import { api } from './api.js';
 import { characterEntries, worldEntries } from './tavern.js';
 
+const DEFAULT_REMOTE_PATH = 'sillytavern-backup';
+const DEFAULT_PROFILE_NAME = '默认';
+export const DEFAULT_INTERVAL_MINUTES = 360;
+export const MIN_INTERVAL_MINUTES = 15;
+export const MAX_INTERVAL_MINUTES = 7 * 24 * 60;
+
 export const DEFAULT_CONFIG = {
+    profiles: [],
+    activeProfileId: '',
     url: '',
     username: '',
-    remotePath: 'SillyTavern-WebDAV-Backup',
+    remotePath: DEFAULT_REMOTE_PATH,
     // 六类一律不勾：备份什么由用户自己去「范围」里决定
     scope: {
         characters: { all: false, selected: [] },
@@ -19,8 +32,9 @@ export const DEFAULT_CONFIG = {
         worlds: { all: false, selected: [] },
         apiProfiles: { all: false, selected: [] },
     },
-    auto: { enabled: false, onChatEvents: true, intervalHours: 6 },
+    auto: { enabled: false, onChatEvents: true, intervalMinutes: DEFAULT_INTERVAL_MINUTES },
     hasPassword: false,
+    encryption: { enabled: false, hasPassphrase: false },
     lastBackupAt: '',
 };
 
@@ -118,6 +132,8 @@ function clone(value) {
 }
 
 let current = clone(DEFAULT_CONFIG);
+// 先跑一遍补出第一条方案，好让 activeProfile() 在配置加载回来之前也有值可给
+applyConfig({});
 
 export function getConfig() {
     return current;
@@ -128,10 +144,12 @@ export function applyConfig(incoming = {}) {
     const base = clone(DEFAULT_CONFIG);
     const scope = incoming.scope || {};
     const auto = incoming.auto || {};
+    const profiles = readProfiles(incoming.profiles);
+    const wanted = String(incoming.activeProfileId || '');
+    const activeProfileId = profiles.some(item => item.id === wanted) ? wanted : profiles[0].id;
     current = {
-        url: incoming.url ?? base.url,
-        username: incoming.username ?? base.username,
-        remotePath: incoming.remotePath || base.remotePath,
+        profiles,
+        activeProfileId,
         scope: {
             characters: readSelection(scope.characters, base.scope.characters),
             chats: readChats(scope.chats, base.scope.chats),
@@ -144,12 +162,126 @@ export function applyConfig(incoming = {}) {
         auto: {
             enabled: auto.enabled === true,
             onChatEvents: auto.onChatEvents !== false,
-            intervalHours: Number(auto.intervalHours) > 0 ? Number(auto.intervalHours) : base.auto.intervalHours,
+            intervalMinutes: readInterval(auto, base.auto.intervalMinutes),
         },
-        hasPassword: incoming.hasPassword === true,
-        lastBackupAt: incoming.lastBackupAt || '',
     };
+    reproject();
     return current;
+}
+
+/**
+ * 间隔从小时改成了分钟。后端会做迁移，但配置在后端落盘之前，
+ * 前端也可能先拿到一份带 intervalHours 的旧数据 —— 同样按小时折算，
+ * 免得那个 6 在界面上显示成 6 分钟。
+ */
+function readInterval(auto, fallback) {
+    const pick = auto?.intervalMinutes !== undefined
+        ? Number(auto.intervalMinutes)
+        : (auto?.intervalHours !== undefined ? Number(auto.intervalHours) * 60 : NaN);
+    if (!Number.isFinite(pick)) return fallback;
+    return Math.min(MAX_INTERVAL_MINUTES, Math.max(MIN_INTERVAL_MINUTES, Math.round(pick)));
+}
+
+// ---------------------------------------------------------------------------
+// 方案
+// ---------------------------------------------------------------------------
+
+function newProfileId() {
+    return `p-${Math.random().toString(16).slice(2, 10)}`;
+}
+
+function emptyProfile(name) {
+    return {
+        id: newProfileId(),
+        name: name || DEFAULT_PROFILE_NAME,
+        url: '',
+        username: '',
+        remotePath: DEFAULT_REMOTE_PATH,
+        hasPassword: false,
+        lastBackupAt: '',
+        // 加密是方案级的：坚果云那套可以开着，家里 NAS 那套关着
+        encryption: { enabled: false, hasPassphrase: false },
+    };
+}
+
+/** 后端只回「开没开、存没存」，口令明文永远拿不到。 */
+function readEncryption(raw) {
+    return {
+        enabled: raw?.enabled === true,
+        hasPassphrase: raw?.hasPassphrase === true,
+    };
+}
+
+/** 后端保证至少回一条；真拿不到（首次加载失败）就本地先造一条顶着。 */
+function readProfiles(raw) {
+    const list = Array.isArray(raw) ? raw : [];
+    const out = list
+        .filter(item => item && typeof item === 'object' && item.id)
+        .map(item => ({
+            id: String(item.id),
+            name: String(item.name || DEFAULT_PROFILE_NAME),
+            url: String(item.url || ''),
+            username: String(item.username || ''),
+            remotePath: String(item.remotePath || DEFAULT_REMOTE_PATH),
+            hasPassword: item.hasPassword === true,
+            lastBackupAt: String(item.lastBackupAt || ''),
+            encryption: readEncryption(item.encryption),
+        }));
+    return out.length ? out : [emptyProfile()];
+}
+
+/** 把当前方案的连接信息投影到顶层，面板与各处读的都是这份。 */
+function reproject() {
+    const active = activeProfile();
+    current.url = active.url;
+    current.username = active.username;
+    current.remotePath = active.remotePath;
+    current.hasPassword = active.hasPassword;
+    current.lastBackupAt = active.lastBackupAt;
+    current.encryption = active.encryption;
+}
+
+export function activeProfile() {
+    return current.profiles.find(item => item.id === current.activeProfileId) || current.profiles[0];
+}
+
+/** 面板改了连接输入框，写回当前方案（顶层投影跟着更新）。 */
+export function setActiveFields(fields) {
+    Object.assign(activeProfile(), fields);
+    reproject();
+}
+
+export function setActiveProfile(id) {
+    if (!current.profiles.some(item => item.id === id)) return false;
+    current.activeProfileId = id;
+    reproject();
+    return true;
+}
+
+export function addProfile(name) {
+    const profile = emptyProfile(name);
+    current.profiles.push(profile);
+    current.activeProfileId = profile.id;
+    reproject();
+    return profile;
+}
+
+export function renameProfile(id, name) {
+    const profile = current.profiles.find(item => item.id === id);
+    if (!profile) return false;
+    profile.name = String(name || '').trim() || DEFAULT_PROFILE_NAME;
+    return true;
+}
+
+/** 删到一条不剩就没法备份了，最后一条不给删。 */
+export function removeProfile(id) {
+    if (current.profiles.length <= 1) return false;
+    const index = current.profiles.findIndex(item => item.id === id);
+    if (index < 0) return false;
+    current.profiles.splice(index, 1);
+    if (current.activeProfileId === id) current.activeProfileId = current.profiles[0].id;
+    reproject();
+    return true;
 }
 
 function readSelection(raw, fallback) {
@@ -187,14 +319,29 @@ export async function loadConfig() {
 }
 
 /**
- * 把内存副本提交到后端。password 只在用户真的输了新密码时才带上，
- * 留空表示"不修改"，后端会保留原密码。
+ * 把内存副本提交到后端。password 与 passphrase 都只在用户真的输了新值时才带上，
+ * 留空表示"不修改"，后端会保留原值 —— 两个框里的东西都属于当前方案，
+ * 所以只往那一条上放。
  */
-export async function pushConfig(password = '') {
-    const payload = { ...current };
-    delete payload.hasPassword;
-    delete payload.lastBackupAt;
-    if (password) payload.password = password;
+export async function pushConfig(password = '', { clearPassword = false, passphrase = '', clearPassphrase = false } = {}) {
+    const activeId = current.activeProfileId;
+    const payload = {
+        activeProfileId: activeId,
+        scope: current.scope,
+        auto: current.auto,
+        profiles: current.profiles.map(item => {
+            // hasPassphrase 是后端算给前端看的，回传它没有意义
+            const { hasPassword, encryption, ...rest } = item;
+            const base = { ...rest, encryption: { enabled: !!encryption?.enabled } };
+            if (item.id !== activeId) return base;
+
+            if (clearPassphrase) base.encryption.clearPassphrase = true;
+            else if (passphrase) base.encryption.passphrase = passphrase;
+
+            if (clearPassword) return { ...base, clearPassword: true };
+            return password ? { ...base, password } : base;
+        }),
+    };
     const data = await api('config/save', { config: payload });
     applyConfig(data.config || {});
     return data;

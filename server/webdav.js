@@ -1,7 +1,16 @@
 /**
  * WebDAV 通信原语：URL 构建、请求、PROPFIND 解析、目录遍历、JSON 读写。
  * 上层模块不应直接使用 fetch。
+ *
+ * 加密就挂在这一层：config.cryptoKey 有值时，putBuffer 加密、getBuffer 解密，
+ * 上层（backup.js / cloud.js）一行都不用改，连 index.json 与 lock.json 都顺带
+ * 保护上了 —— 索引里列着全部本地路径，本身就值得加密。
+ *
+ * getBuffer 走「降级读」：只有带魔数的才解密，明文原样返回。这样用户手动传上
+ * 网盘的东西不会因为开了加密就读不出来。keycheck.json 是唯一的例外，它必须以
+ * 明文读写（要靠它才能拿到 salt），所以单独走 RawBuffer 那对函数。
  */
+const encryption = require('./encryption.js');
 
 function splitRemotePath(remotePath) {
     return String(remotePath || '')
@@ -65,12 +74,13 @@ async function webDavRequest(config, extraSegments, options, expectedStatuses) {
     return response;
 }
 
-async function getBuffer(config, segments) {
+/** 明文读写。只给 keycheck.json 用 —— 它是加密体系的引导文件，不能被加密。 */
+async function getRawBuffer(config, segments) {
     const response = await webDavRequest(config, segments, { method: 'GET' }, [200]);
     return Buffer.from(await response.arrayBuffer());
 }
 
-async function putBuffer(config, segments, body, contentType = 'application/octet-stream') {
+async function putRawBuffer(config, segments, body, contentType = 'application/octet-stream') {
     await webDavRequest(config, segments, {
         method: 'PUT',
         body,
@@ -78,18 +88,57 @@ async function putBuffer(config, segments, body, contentType = 'application/octe
     }, [200, 201, 204]);
 }
 
+/**
+ * 下载并按需解密。
+ *
+ * 没配密钥却拿到密文时不硬解也不报错 —— 原样返回让上层去处理，
+ * 报错文案由 index.js 的 keycheck 环节统一给出，那里才说得清是怎么回事。
+ */
+async function getBuffer(config, segments) {
+    const raw = await getRawBuffer(config, segments);
+    if (!config.cryptoKey) return raw;
+    return encryption.decrypt(raw, config.cryptoKey);
+}
+
+async function putBuffer(config, segments, body, contentType = 'application/octet-stream') {
+    // 加密后就不再是原来的类型了，声称是 json 只会误导网盘的预览器
+    const payload = config.cryptoKey ? encryption.encrypt(body, config.cryptoKey) : body;
+    const type = config.cryptoKey ? 'application/octet-stream' : contentType;
+    await putRawBuffer(config, segments, payload, type);
+}
+
 async function remove(config, segments) {
     await webDavRequest(config, segments, { method: 'DELETE' }, [200, 202, 204, 404]);
 }
 
+/** 读 JSON。走 getBuffer 而不是直接 fetch，才能一并享受解密与降级读。 */
 async function readJson(config, segments, fallback) {
     try {
-        const response = await webDavRequest(config, segments, { method: 'GET' }, [200]);
-        const text = await response.text();
+        const text = (await getBuffer(config, segments)).toString('utf8');
         return text.trim() ? JSON.parse(text) : fallback;
     } catch {
         return fallback;
     }
+}
+
+/** 明文读 JSON。同 getRawBuffer，只给 keycheck.json 用。 */
+async function readRawJson(config, segments, fallback) {
+    try {
+        const text = (await getRawBuffer(config, segments)).toString('utf8');
+        return text.trim() ? JSON.parse(text) : fallback;
+    } catch {
+        return fallback;
+    }
+}
+
+/** 明文写 JSON。同上。 */
+async function writeRawJson(config, segments, value) {
+    await putRawBuffer(
+        config,
+        segments,
+        Buffer.from(JSON.stringify(value, null, 2), 'utf8'),
+        'application/json; charset=utf-8',
+    );
 }
 
 async function writeJson(config, segments, value) {
@@ -101,21 +150,55 @@ async function writeJson(config, segments, value) {
     );
 }
 
+/**
+ * MKCOL 回 405 有两种截然不同的含义，必须靠 PROPFIND 分辨：
+ *   目录已存在        → 无害，RFC 4918 就是这么规定的（坚果云则直接回 201）
+ *   该层根本不让创建  → 致命，但如果放过去，错误会一路拖到 PUT 才以
+ *                       「Method Not Allowed」的面目出现，完全看不出真正的原因
+ *
+ * 后者在 NAS 上很常见：WebDAV 根目录往往是共享文件夹的只读列表，
+ * 不能在它下面直接建东西（OPTIONS 的 Allow 头里没有 MKCOL / PUT 就是这个情况）。
+ */
+async function assertCollectionExists(config, segments) {
+    const shown = `/${segments.join('/')}`;
+    let response;
+    try {
+        response = await webDavRequest(config, segments, {
+            method: 'PROPFIND',
+            includeRemotePath: false,
+            headers: { Depth: '0', 'Content-Type': 'application/xml; charset=utf-8' },
+            body: PROPFIND_BODY,
+        }, [207, 200]);
+    } catch (error) {
+        const error2 = new Error(
+            `远程路径 ${shown} 不存在，服务器又拒绝创建它（MKCOL 405）。`
+            + `WebDAV 根目录通常不允许直接新建文件夹，请把「远程路径」改成以一个已存在的`
+            + `共享文件夹开头，例如「共享名/${splitRemotePath(config.remotePath).at(-1) || 'backup'}」。`,
+        );
+        error2.status = 405;
+        error2.cause = error;
+        throw error2;
+    }
+    return response;
+}
+
 /** 建到 remotePath 本身。 */
 async function ensureRoot(config) {
     const parts = splitRemotePath(config.remotePath);
     for (let index = 1; index <= parts.length; index++) {
-        await webDavRequest(config, parts.slice(0, index), {
+        const slice = parts.slice(0, index);
+        const response = await webDavRequest(config, slice, {
             method: 'MKCOL',
             includeRemotePath: false,
         }, [200, 201, 204, 405]);
+        if (response.status === 405) await assertCollectionExists(config, slice);
     }
 }
 
 /**
  * 在 remotePath 下按需创建多级子目录。created 用于单次备份内去重。
  *
- * 405 是"已存在"（坚果云对已存在的目录直接回 201，也一并接受）。
+ * 405 交给 assertCollectionExists 分辨是"已存在"还是"不让建"。
  * 409 故意不在成功之列 —— 它表示父集合不存在，把它当成功只会让后续 PUT 莫名其妙地失败。
  */
 async function ensureDir(config, segments, created) {
@@ -124,10 +207,12 @@ async function ensureDir(config, segments, created) {
         const slice = segments.slice(0, index);
         const key = slice.join('/');
         if (created.has(key)) continue;
-        await webDavRequest(config, [...base, ...slice], {
+        const full = [...base, ...slice];
+        const response = await webDavRequest(config, full, {
             method: 'MKCOL',
             includeRemotePath: false,
         }, [200, 201, 204, 405]);
+        if (response.status === 405) await assertCollectionExists(config, full);
         created.add(key);
     }
 }
@@ -232,9 +317,13 @@ module.exports = {
     webDavRequest,
     getBuffer,
     putBuffer,
+    getRawBuffer,
+    putRawBuffer,
     remove,
     readJson,
     writeJson,
+    readRawJson,
+    writeRawJson,
     ensureRoot,
     ensureDir,
     listDir,
