@@ -1,17 +1,6 @@
 /**
- * SillyTavern 服务端插件入口。各文件分工：
- *
- *   index.js   路由注册（本文件）
- *   config.js  插件自管配置（含密码）
- *   paths.js   本地路径 ↔ 远端路径映射，以及备份范围判定
- *   backup.js  上传 / 下载 / 预览
- *   cloud.js   云端文件管理：列举、指定下载、指定删除
- *   cards.js   解析 png 取出内嵌世界书的名字
- *   builtin.js 认出酒馆自带的内容（背景图），全选时跳过
- *   webdav.js  WebDAV 通信原语
- *
- * 连接信息与范围都从插件自己的 config.json 读，前端不再随请求携带地址与密码；
- * 唯一随请求带上的是「avatar 文件名 → 角色名」映射 —— 只有酒馆前端知道 png 里的角色叫什么。
+ * SillyTavern 服务端入口：注册配置、备份、云端文件及角色卡查询路由。
+ * 连接与范围读取自插件配置，角色名映射由前端请求提供。
  */
 const configStore = require('./config.js');
 const paths = require('./paths.js');
@@ -21,6 +10,7 @@ const cloud = require('./cloud.js');
 const cards = require('./cards.js');
 const builtin = require('./builtin.js');
 const synthetic = require('./synthetic.js');
+const activity = require('./activity.js');
 
 const info = {
     id: 'sillytavern-cloud-backup',
@@ -37,7 +27,7 @@ async function handle(response, fn) {
     }
 }
 
-/** 角色名映射；前端没带就退化成用 avatar 文件名当角色名，功能不受影响只是网盘里不好认。 */
+/** 读取请求中的角色名映射，缺失时使用 avatar 文件名。 */
 function readNames(request) {
     const raw = request.body?.characterNames;
     return paths.buildNameIndex(
@@ -47,14 +37,8 @@ function readNames(request) {
 }
 
 /**
- * 往范围里注入两份排除名单，「全选」时跳过它们：
- *
- *   世界书  已内嵌在角色卡里的那些 —— 跟着角色卡一起走，再单独传一份是重复。
- *           名单由后端直接解析 png 得出，不走前端：酒馆开了 lazyLoadCharacters 之后
- *           前端根本看不到 data.character_book（详见 cards.js）。
- *   背景图  酒馆自带的那批风景图 —— 装好酒馆本来就有，传上网盘纯属占地方。
- *
- * 两份都只在 all 为真时生效，用户显式勾选的照传（详见 paths.inScope）。
+ * 向范围注入内嵌世界书和自带背景图的排除名单。
+ * 排除名单仅作用于 all 模式，显式选中的项目照常处理。
  */
 async function scopeFor(config, directories) {
     const exclude = [...await cards.embeddedBookNames(directories)];
@@ -72,21 +56,15 @@ async function scopeFor(config, directories) {
     };
 }
 
-/**
- * 连接信息 + 加密密钥。
- *
- * 任何真正读写云端的路由都必须走它，而不是直接用 resolveConfig —— prepareCrypto
- * 会在这里验证口令，验不过就抛错。这一步的位置很关键：它发生在任何本地磁盘写入
- * 之前，所以口令输错的最坏结果只是一句报错，而不是把解不开的密文糊到角色卡目录上。
- */
-async function connectionFor(request) {
-    return backup.prepareCrypto(configStore.resolveConfig(request.user.directories));
+/** 读取连接配置并通过 prepareCrypto 验证口令、准备密钥；失败时中止请求。 */
+async function connectionFor(request, access) {
+    return backup.prepareCrypto(configStore.resolveConfig(request.user.directories), access);
 }
 
 /** 连接信息用配置里的，范围用注入过排除名单的。 */
-async function configFor(request) {
+async function configFor(request, access) {
     const directories = request.user.directories;
-    const config = await connectionFor(request);
+    const config = await connectionFor(request, access);
     return { ...config, scope: await scopeFor(config, directories) };
 }
 
@@ -100,34 +78,32 @@ function readPaths(request) {
 }
 
 function init(router) {
-    // ---- 状态与配置 ----
+    // 状态与配置
 
     router.post('/status', (request, response) => handle(response, async () => {
         const config = configStore.readConfig(request.user.directories);
-        const state = backup.readState(request.user.directories);
         return {
             helper: true,
             hasPassword: !!config.password,
             configured: !!config.url,
-            // 当前方案的加密状态。口令本身不回传，只说开没开、存没存
+            // 返回当前方案的加密开关、口令状态与口令文本。
             encryption: {
                 enabled: !!config.encryption?.enabled,
                 hasPassphrase: !!config.encryption?.passphrase,
+                passphrase: String(config.encryption?.passphrase || ''),
             },
-            // 配置里的时间记在当前方案上，各方案各算各的；scan-cache 里那份是全局的，
-            // 换方案不会重置，只能当老配置的兜底用
-            lastBackupAt: config.lastBackupAt || state.lastBackupAt || '',
-            // 范围弹窗要用：预设与美化各有哪些目录、各有多少文件多大
+            lastBackupAt: config.lastBackupAt,
+            // 返回范围弹窗使用的预设与美化目录统计。
             scopeDirs: backup.scopeDirStats(request.user.directories),
-            // 角色卡文件夹标题上的「N 条聊天」。明细走 chats/list 按需拿
+            // 返回聊天数量和大小，单条明细通过 chats/list 查询。
             chatCounts: backup.chatCounts(request.user.directories),
-            // 人设与 API 配置的可选项。都是从 settings.json 里读出来的，不含密钥本身
+            // 返回人设与 API 配置选项，省略密钥文本。
             personas: synthetic.listPersonas(request.user.directories),
             apiProfiles: synthetic.listApiProfiles(request.user.directories),
         };
     }));
 
-    // 展开某张角色卡时才来要它的聊天明细 —— 角色多起来一次性回传能到几百 KB
+    // 按角色查询聊天明细。
     router.post('/chats/list', (request, response) => handle(response, async () => {
         return { entries: backup.chatEntries(request.user.directories, request.body?.stem) };
     }));
@@ -139,15 +115,13 @@ function init(router) {
 
     router.post('/config/save', (request, response) => handle(response, async () => {
         const saved = configStore.writeConfig(request.user.directories, request.body?.config || {});
+        backup.invalidateChanges(request.user.directories, saved);
         return { config: configStore.publicConfig(saved), scopeText: paths.describeScope(saved.scope) };
     }));
 
-    /**
-     * 测试连接。开了加密的话顺带跑一次真实的加密往返 —— 传上去再读回来比对，
-     * 这是用户唯一能主动确认「加密确实在工作」的入口，光验证可读写还不够。
-     */
+    /** 测试远端读写；开启加密时同时验证加密与解密往返。 */
     router.post('/test', (request, response) => handle(response, async () => {
-        const config = await connectionFor(request);
+        const config = await connectionFor(request, 'write');
         const marker = `.sillytavern-cloud-backup-test-${Date.now()}.txt`;
         const text = `SillyTavern WebDAV test ${new Date().toISOString()}\n`;
         const body = Buffer.from(text, 'utf8');
@@ -155,12 +129,11 @@ function init(router) {
 
         let roundTrip = '';
         if (config.cryptoKey) {
-            // 读回来必须与原文逐字节相同。不同就说明加解密链路有问题，
-            // 这时候绝不能让用户以为一切正常然后把真实数据传上去
+            // 逐字节验证回读内容。
             const back = await webdav.getBuffer(config, [marker]);
             if (!back.equals(body)) {
                 await webdav.remove(config, [marker]).catch(() => {});
-                throw new Error('加密自检失败：测试文件读回后与原文不一致，请勿在此方案下上传数据。');
+                throw new Error('加密测试失败，请勿使用此方案上传。');
             }
             roundTrip = '，加密往返自检通过';
         }
@@ -173,50 +146,75 @@ function init(router) {
         return { message: `连接可用，远端目录可读写${roundTrip}。` };
     }));
 
-    // ---- 备份 ----
+    // 备份
 
     router.post('/backup/plan', (request, response) => handle(response, async () => {
-        const config = await configFor(request);
+        const config = await configFor(request, 'read');
         return {
             plan: await backup.planOnly(request.user, config, readNames(request)),
             scopeText: paths.describeScope(config.scope),
         };
     }));
 
+    router.post('/backup/changes', (request, response) => handle(response, async () => {
+        const directories = request.user.directories;
+        const config = configStore.resolveConfig(directories);
+        config.scope = await scopeFor(config, directories);
+        return {
+            plan: await backup.changesOnly(request.user, config, readNames(request)),
+            scopeText: paths.describeScope(config.scope),
+        };
+    }));
+
+    router.post('/backup/activity', (request, response) => handle(response, async () => {
+        const directories = request.user.directories;
+        return { activity: activity.readAutoUploads(directories, configStore.readConfig(directories)) };
+    }));
+
     router.post('/backup/upload', (request, response) => handle(response, async () => {
-        const result = await backup.runUpload(request.user, await configFor(request), readNames(request));
+        const trigger = request.body.trigger;
+        if (trigger !== 'manual' && trigger !== 'auto') throw new Error('上传来源无效。');
+        const config = await configFor(request, 'write');
+        const result = await backup.runUpload(request.user, config, readNames(request));
         configStore.touchLastBackup(request.user.directories, result.lastBackupAt);
-        return result;
+        return {
+            ...result,
+            activity: trigger === 'auto'
+                ? activity.recordAutoUpload(request.user.directories, config, result)
+                : activity.readAutoUploads(request.user.directories, config),
+        };
     }));
 
     router.post('/backup/download', (request, response) => handle(response, async () => {
-        const result = await backup.runDownload(request.user, await configFor(request), readNames(request));
+        const result = await backup.runDownload(request.user, await configFor(request, 'read'), readNames(request));
         configStore.touchLastBackup(request.user.directories, result.lastBackupAt);
         return result;
     }));
 
-    // ---- 角色卡 ----
+    // 角色卡
 
-    // 前端拿这份名单把内嵌的世界书从「选择世界书」列表里隐藏掉
+    // 返回范围列表需要隐藏的内嵌世界书名单。
     router.post('/cards/embedded-worlds', (request, response) => handle(response, async () => {
         return { books: [...await cards.embeddedBookNames(request.user.directories)] };
     }));
 
-    // ---- 云端文件管理 ----
+    // 云端文件管理
 
     router.post('/cloud/list', (request, response) => handle(response, async () => {
-        const config = await connectionFor(request);
-        return { items: await cloud.list(config, readNames(request), request.user) };
+        const config = await connectionFor(request, 'read');
+        return { items: await cloud.list(config, readNames(request)) };
     }));
 
     router.post('/cloud/download', (request, response) => handle(response, async () => {
-        const config = await connectionFor(request);
+        const config = await connectionFor(request, 'read');
         return await cloud.download(request.user, config, readNames(request), readPaths(request));
     }));
 
     router.post('/cloud/delete', (request, response) => handle(response, async () => {
-        const config = await connectionFor(request);
-        return await cloud.remove(request.user, config, readNames(request), readPaths(request));
+        const config = await connectionFor(request, 'read');
+        const result = await cloud.remove(request.user, config, readNames(request), readPaths(request));
+        backup.invalidateChanges(request.user.directories, config);
+        return result;
     }));
 }
 

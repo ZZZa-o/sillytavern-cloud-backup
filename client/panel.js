@@ -6,9 +6,7 @@ import {
 
 const DEFAULT_REMOTE_PATH = 'sillytavern-backup';
 
-// ---------------------------------------------------------------------------
 // 格式化与状态
-// ---------------------------------------------------------------------------
 
 export function escHtml(value) {
     return String(value ?? '')
@@ -39,19 +37,37 @@ export function isBusy() {
     return busy;
 }
 
-/**
- * 只禁用按钮，不动输入框 —— 上传期间用户还能继续填地址或改密码，
- * 早先连 input 一起禁用会把正在输入的内容打断。
- */
+/** 更新按钮的禁用状态。 */
 export function setBusy(value) {
     busy = value;
     $('#stcb-root button').prop('disabled', value);
 }
 
-export function setStatus(message, type = 'info') {
+function writeStatus(selector, message, type) {
     const text = String(message || '').trim();
-    const status = $('#stcb-status').removeClass('is-info is-ok is-warn is-error').text(text);
+    const status = $(selector).removeClass('is-info is-ok is-warn is-error').text(text);
     if (text) status.addClass(`is-${type}`);
+}
+
+export function setStatus(message, type = 'info') {
+    writeStatus('#stcb-status', message, type);
+}
+
+export function setBackupStatus(message, type = 'info') {
+    writeStatus('#stcb-backup-status', message, type);
+}
+
+export function setAutoStatus(message, type = 'info') {
+    writeStatus('#stcb-auto-status', message, type);
+}
+
+export function setCheckStatus(message, type = 'info') {
+    writeStatus('#stcb-check-status', message, type);
+}
+
+/** 更新云端文件区域的状态行。 */
+export function setCloudStatus(message, type = 'info') {
+    writeStatus('#stcb-cloud-status', message, type);
 }
 
 export function notify(type, message) {
@@ -64,26 +80,20 @@ export function setReport(html) {
     $('#stcb-report').html(html);
 }
 
-/**
- * 包住"置忙 → 执行 → 出错则显示 → 复位"这套每个动作都要写一遍的样板。
- * fn 抛错时把消息写进状态栏，返回 undefined。
- */
-export async function withBusy(pendingMessage, fn, fallbackError = '操作失败。') {
+/** 执行动作并显示错误，结束后恢复按钮。 */
+export async function withBusy(pendingMessage, fn, status = setStatus) {
     setBusy(true);
-    if (pendingMessage) setStatus(pendingMessage, 'info');
+    if (pendingMessage) status(pendingMessage, 'info');
     try {
         return await fn();
     } catch (error) {
-        setStatus(error?.message || fallbackError, 'error');
-        return undefined;
+        status(error.message, 'error');
     } finally {
         setBusy(false);
     }
 }
 
-// ---------------------------------------------------------------------------
-// 面板 HTML。用小构件拼装，避免同样的 button / checkbox 标签抄十遍。
-// ---------------------------------------------------------------------------
+// 面板 HTML 与通用控件。
 
 const attr = value => escHtml(value);
 
@@ -102,7 +112,7 @@ function checkbox(id, label, isChecked) {
         + `<span>${escHtml(label)}</span></label>`;
 }
 
-// type="button" 是必须的：没有它，按钮在某些主题的表单容器里会触发提交，表现为"点了没反应"
+// 统一使用 type="button" 创建操作按钮。
 export function button(id, icon, label, variant = '') {
     return `<button type="button" id="${id}" class="menu_button${variant ? ` ${variant}` : ''}">`
         + `<i class="fa-solid ${icon}"></i><span>${escHtml(label)}</span></button>`;
@@ -125,7 +135,7 @@ export function buildPanel() {
     const c = getConfig();
 
     const connection = section('',
-        // 方案 = 一套连接信息。范围与自动上传是全局的，切方案不跟着变
+        // 每个方案保存一套连接信息，范围与自动上传设置全局共用。
         row('stcb-profile-row',
             `<label class="stcb-inline-field stcb-profile-field"><span>方案</span>`
             + `<select id="stcb-profile" class="text_pole"></select></label>`,
@@ -145,31 +155,33 @@ export function buildPanel() {
                 placeholder: c.hasPassword ? '已保存，留空则不修改' : '填入后点保存配置',
             })),
         ),
-        row('stcb-actions',
-            button('stcb-save-config', 'fa-floppy-disk', '保存配置', 'primary'),
-            button('stcb-test', 'fa-plug-circle-check', '测试连接'),
-        ),
-        // 加密属于当前方案，不是全局开关 —— 自建 NAS 那套方案可以不开，
-        // 免得网盘网页端点开文件全是打不开的密文
+        // 显示当前方案的加密设置，随连接配置一起保存。
         row('stcb-encrypt-row',
             checkbox('stcb-encrypt', '加密上传的文件', !!c.encryption?.enabled),
         ),
         `<div id="stcb-encrypt-fields" class="stcb-encrypt-fields"${c.encryption?.enabled ? '' : ' hidden'}>`
-        + field('加密口令', textInput('stcb-passphrase', '', {
-            type: 'password',
-            autocomplete: 'new-password',
-            placeholder: c.encryption?.hasPassphrase ? '已保存，留空则不修改' : '填入后点保存配置',
+        // 在文本框中回显当前加密口令。
+        + field('加密口令', textInput('stcb-passphrase', c.encryption?.passphrase || '', {
+            autocomplete: 'off',
+            placeholder: '填入后点保存配置',
         }))
-        + '<div class="stcb-meta stcb-encrypt-warn">口令丢失后云端数据<b>无法恢复</b>；'
-        + '换设备同步时必须填写同一个口令。仅加密文件内容，文件名与大小仍对网盘可见。</div>'
         + '</div>',
+        row('stcb-actions',
+            button('stcb-save-config', 'fa-floppy-disk', '保存配置', 'primary'),
+            button('stcb-test', 'fa-plug-circle-check', '测试连接'),
+        ),
+        // 在保存按钮下方显示加密说明。
+        `<div id="stcb-encrypt-note" class="stcb-meta stcb-encrypt-warn"${c.encryption?.enabled ? '' : ' hidden'}>`
+        + '口令丢失<b>无法恢复</b>，换设备请使用同一口令。'
+        + '仅加密内容，文件名与大小仍可见。</div>',
+        '<div id="stcb-status" class="stcb-status" role="status"></div>',
     );
 
     const scope = section('备份范围',
         row('stcb-actions',
             button('stcb-scope', 'fa-list-check', '范围'),
         ),
-        `<div id="stcb-scope-text" class="stcb-meta">当前已选择同步范围：${escHtml(describeScope())}</div>`,
+        `<div id="stcb-scope-text" class="stcb-meta">备份范围：${escHtml(describeScope())}</div>`,
     );
 
     const backup = section('备份',
@@ -178,15 +190,14 @@ export function buildPanel() {
             button('stcb-upload', 'fa-cloud-arrow-up', '上传到云端', 'primary'),
             button('stcb-download', 'fa-cloud-arrow-down', '从云端下载'),
         ),
+        '<div id="stcb-backup-status" class="stcb-status" role="status"></div>',
+        '<div id="stcb-preview-report" class="stcb-report" aria-live="polite"></div>',
+        '<div id="stcb-check-status" class="stcb-status stcb-check-status"></div>',
         '<div id="stcb-report" class="stcb-report"></div>',
     );
 
     const cloud = section('云端文件',
-        // 两组按钮包一层，整体推到标题右边，排成一行五个。
-        //
-        // 文字压到两个字是必须的：面板固定 375px 宽，标题占 50px，
-        // 「下载选中」这种四字标签会让五个按钮撑到 344px，加起来超宽，
-        // 整条工具条就会被挤到标题下一行去。短标签合计 272px，正好放得下
+        // 两组操作按钮共用工具条，位于标题右侧。
         row('stcb-cloud-toolbar',
             row('stcb-actions stcb-cloud-actions',
                 button('stcb-cloud-refresh', 'fa-rotate', '刷新'),
@@ -201,6 +212,8 @@ export function buildPanel() {
         '<input type="search" id="stcb-cloud-search" class="text_pole stcb-cloud-search" placeholder="搜索云端文件…">',
         '<div id="stcb-cloud-list" class="stcb-cloud-list"></div>',
         '<div id="stcb-cloud-meta" class="stcb-meta"></div>',
+        // 在云端文件区域底部显示操作结果。
+        '<div id="stcb-cloud-status" class="stcb-status stcb-cloud-status"></div>',
     );
 
     const auto = `<section class="stcb-section stcb-section-auto">`
@@ -212,7 +225,9 @@ export function buildPanel() {
                 min: MIN_INTERVAL_MINUTES, max: MAX_INTERVAL_MINUTES, step: 5,
             }, '分钟'),
         )
-        + `</section>`;
+        + '<div id="stcb-auto-status" class="stcb-status" role="status"></div>'
+        + '<div id="stcb-auto-report" class="stcb-report"></div>'
+        + '</section>';
 
     const html = `
         <div id="stcb-root" class="stcb-shell">
@@ -233,7 +248,6 @@ export function buildPanel() {
                     ${backup}
                     ${cloud}
                     ${auto}
-                    <div id="stcb-status" class="stcb-status"></div>
                 </div>
             </div>
         </div>
@@ -242,7 +256,7 @@ export function buildPanel() {
     $('#extensions_settings2').append(html);
 }
 
-/** 后端配置到手后重刷输入框；密码框永远不回显。 */
+/** 用后端配置更新表单；WebDAV 授权密码框保持空白。 */
 export function fillForm() {
     const c = getConfig();
     renderProfileSelect();
@@ -259,10 +273,7 @@ export function fillForm() {
     renderLastBackup(c.lastBackupAt);
 }
 
-/**
- * 加密状态。三种情况要分清楚 —— 中间那种是最危险的：开了开关却没口令，
- * 用户会以为已经加密了，实际上后端会拒绝连接（resolveConfig 里拦着）。
- */
+/** 显示未加密、缺口令或已加密状态，同步口令框与说明的显隐。 */
 export function renderEncryptState(encryption) {
     const enabled = !!encryption?.enabled;
     const ready = enabled && !!encryption?.hasPassphrase;
@@ -273,10 +284,9 @@ export function renderEncryptState(encryption) {
 
     $('#stcb-encrypt').prop('checked', enabled);
     $('#stcb-encrypt-fields').prop('hidden', !enabled);
-    $('#stcb-passphrase').val('').attr(
-        'placeholder',
-        encryption?.hasPassphrase ? '已保存，留空则不修改' : '填入后点保存配置',
-    );
+    $('#stcb-encrypt-note').prop('hidden', !enabled);
+    // 回填当前方案的加密口令。
+    $('#stcb-passphrase').val(encryption?.passphrase || '');
 }
 
 /** 方案下拉框的选项跟着 profiles 走；选中项即当前方案。 */
@@ -286,7 +296,7 @@ export function renderProfileSelect() {
         .map(item => `<option value="${escHtml(item.id)}">${escHtml(item.name)}</option>`)
         .join('');
     $('#stcb-profile').html(options).val(c.activeProfileId);
-    // 只剩一条时不给删，删光了就没法备份了
+    // 仅剩一个方案时禁用删除。
     $('#stcb-profile-remove').prop('disabled', c.profiles.length <= 1);
 }
 
@@ -298,7 +308,7 @@ export function renderPasswordState(saved) {
 }
 
 export function renderScopeText() {
-    $('#stcb-scope-text').text(`当前已选择同步范围：${describeScope()}`);
+    $('#stcb-scope-text').text(`备份范围：${describeScope()}`);
 }
 
 export function renderLastBackup(value) {
@@ -306,8 +316,8 @@ export function renderLastBackup(value) {
 }
 
 /**
- * 把面板上的连接与自动执行输入写回内存配置。范围不在这里，它由弹窗直接改。
- * 连接四项属于当前方案，走 setActiveFields 写进 profiles，顶层那份只是投影。
+ * 将连接及加密输入写入当前方案，更新全局自动上传设置。
+ * 备份范围由范围弹窗修改。
  */
 export function readFormIntoConfig() {
     const c = getConfig();
@@ -316,10 +326,11 @@ export function readFormIntoConfig() {
         url: val('stcb-url').trim(),
         username: val('stcb-username').trim(),
         remotePath: val('stcb-remote-path').trim() || DEFAULT_REMOTE_PATH,
-        // hasPassphrase 由后端说了算，这里只写开关；口令走 pushConfig 的参数
+        // 保存输入的口令，并合并当前口令的已保存状态。
         encryption: {
             enabled: $('#stcb-encrypt').prop('checked'),
-            hasPassphrase: !!getConfig().encryption?.hasPassphrase,
+            hasPassphrase: !!val('stcb-passphrase') || !!getConfig().encryption?.hasPassphrase,
+            passphrase: val('stcb-passphrase'),
         },
     });
     c.auto.enabled = $('#stcb-auto-enabled').prop('checked');

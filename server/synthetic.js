@@ -1,22 +1,9 @@
 /**
- * 合成文件：备份链路里"看起来是一个文件、实际不在磁盘上"的那几样。
- *
- * 用户人设与 API 连接配置都没有自己的文件 —— 它们是 settings.json 里的几个字段
- * （外加 secrets.json 里的密钥）。整份 settings.json 传上网盘再整份盖回来，
- * 会连界面偏好、当前模型这些设备相关的东西一起覆盖，所以这里只抽需要的字段，
- * 拼成一个虚拟文件参与备份，下载时**逐键合并**回去，不动其余部分。
- *
- *   personas/<人设名>.json      power_user 里某一个人设的名字、描述与注入设置
- *                               （头像是真实文件，走普通目录，不在这里）
- *   api-profiles/<配置名>.json  某一个 connectionManager 配置档 + 它引用到的密钥与代理预设
- *
- * 这两类都是**一项一份**：勾一个人设就只拼那一个人设，下载时也只合并那一个，
- * 本机其他人设与配置档一个字都不会被动到。早先的版本各挤在一份
- * personas.json / api-profiles.json 里，那种整份文件现在只读不写（见文件末尾 FILES）。
- *
- * 关于密钥：API 配置文件里带**明文** API key 与代理密码。这是插件使用者
- * 明确要求的 —— 备份目标是自己的私人网盘，换设备时不必重填一遍。
- * 只有被勾中的那几个配置档引用到的密钥会被带上，没引用的一个都不碰。
+ * 从 settings.json 和 secrets.json 提取人设及 API 配置，生成合成文件。
+ * personas/<人设名>.json 保存人设名字、描述与注入设置，头像单独备份。
+ * api-profiles/<配置名>.json 保存单个配置档及其引用的密钥与代理设置。
+ * 下载时按条目合并，保留本机其他配置。
+ * API 配置的合成内容包含所引用密钥与代理密码的明文。
  */
 const fs = require('node:fs');
 const path = require('node:path');
@@ -24,22 +11,14 @@ const path = require('node:path');
 const SETTINGS_FILE = 'settings.json';
 const SECRETS_FILE = 'secrets.json';
 
-const PERSONAS_FILE = 'personas.json';
-const API_PROFILES_FILE = 'api-profiles.json';
-
-// 每个人设各是一个合成文件，本地虚拟路径形如 personas/沈知微.json，
-// 落到网盘上是 用户人设/沈知微/persona.json。
-// 「personas」这一段只是个虚拟前缀，酒馆数据目录下并没有这个文件夹。
+// 人设虚拟路径 personas/<人设名>.json 对应云端 用户人设/<人设名>/persona.json。
 const PERSONAS_DIR = 'personas';
 const PERSONA_FILE = 'persona.json';
 
-// API 配置同理，一档一份：本地 api-profiles/我的Claude.json → 网盘 API配置/我的Claude.json。
-// 它没有附属文件（密钥就写在这份 json 里），所以不像人设那样还要套一层文件夹。
+// 配置虚拟路径 api-profiles/<配置名>.json 对应云端 API配置/<配置名>.json。
 const API_DIR = 'api-profiles';
 
-// ---------------------------------------------------------------------------
 // 读写
-// ---------------------------------------------------------------------------
 
 function settingsPath(directories) {
     return path.join(directories.root, SETTINGS_FILE);
@@ -49,29 +28,41 @@ function secretsPath(directories) {
     return path.join(directories.root, SECRETS_FILE);
 }
 
-function readJson(file, fallback) {
+function readJson(file, missingValue) {
     try {
         return JSON.parse(fs.readFileSync(file, 'utf8'));
-    } catch {
-        return fallback;
+    } catch (error) {
+        if (error.code === 'ENOENT') return missingValue;
+        throw error;
     }
 }
 
-/**
- * 原子写：先落临时文件再改名。
- * settings.json 是酒馆的命脉，中途断电也不能留下半个文件。
- */
+const sourceCache = new Map();
+
+/** 按文件大小和修改时间缓存用于提取数据的 JSON。 */
+function readSource(file) {
+    const stat = fs.statSync(file, { throwIfNoEntry: false });
+    if (!stat) {
+        sourceCache.delete(file);
+        return {};
+    }
+    const cached = sourceCache.get(file);
+    if (cached && cached.size === stat.size && cached.mtime === stat.mtimeMs && cached.ctime === stat.ctimeMs) {
+        return cached.data;
+    }
+    const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+    sourceCache.set(file, { size: stat.size, mtime: stat.mtimeMs, ctime: stat.ctimeMs, data });
+    return data;
+}
+
+/** 通过临时文件和重命名原子写入 JSON。 */
 function writeJson(file, data) {
     const tmp = `${file}.stcb-tmp`;
     fs.writeFileSync(tmp, JSON.stringify(data, null, 4), 'utf8');
     fs.renameSync(tmp, file);
 }
 
-/**
- * 递归按键排序后序列化。
- * JSON.stringify 的键序跟着插入顺序走，同样的数据两次序列化可能不一样，
- * 那样每次备份都会觉得"内容变了"而重传一遍。
- */
+/** 递归按键排序后序列化 JSON。 */
 function stableJson(value) {
     if (Array.isArray(value)) return value.map(stableJson);
     if (value && typeof value === 'object') {
@@ -92,7 +83,7 @@ function parseBuffer(buffer) {
     return data;
 }
 
-/** 选择集是否命中。与 paths.js 同义，这里不引它是为了避免两个模块互相 require。 */
+/** 判断名称是否命中选择集。 */
 function selectionHas(selection, name) {
     if (!selection) return false;
     if (selection.all) return true;
@@ -112,9 +103,7 @@ function mergeBy(field, local, incoming) {
     return out;
 }
 
-// ---------------------------------------------------------------------------
 // 用户人设
-// ---------------------------------------------------------------------------
 
 const AVATAR_EXT = /\.(png|jpe?g|webp|gif|avif)$/i;
 
@@ -138,51 +127,25 @@ function hasAvatarFile(directories, avatar) {
     }
 }
 
-/**
- * 从 power_user.personas 的一个值里取出能显示的人设名。
- * 正常是字符串，但旧版本酒馆与别的插件写过对象形态，硬 String() 会变成
- * "[object Object]" 摆在列表里，所以这里逐个字段试一遍。
- */
+/** 去除人设名两端空白；未命名头像返回空串。 */
 function personaNameOf(value) {
-    if (typeof value === 'string') return value.trim();
-    if (value && typeof value === 'object') {
-        for (const key of ['name', 'title', 'label']) {
-            if (typeof value[key] === 'string' && value[key].trim()) return value[key].trim();
-        }
-    }
-    return '';
+    return value === undefined ? '' : value.trim();
 }
 
-/**
- * 列表用的短标签：折掉换行，过长截断。
- * 有人把整段人设描述当名字填进去，原样显示会把一行撑成一屏。
- */
+/** 将标签转换为单行并截断过长内容。 */
 function shortLabel(text, limit = 40) {
     const line = String(text).replace(/\s+/g, ' ').trim();
     return line.length > limit ? `${line.slice(0, limit)}…` : line;
 }
 
-/**
- * 供范围弹窗渲染：一个人设一条。
- *
- * 以磁盘上真实存在的头像文件为准 —— 酒馆的人设面板也是这么列的。
- * settings.json 的 power_user.personas 里会残留头像早被删掉的旧条目，
- * 按那份字典列会多出一堆用户在酒馆里根本看不到的幽灵，看起来就像
- * "同一个人设重复了好几条"。
- *
- * 名字允许重名（一个人可以有多个头像），所以 note 里始终带上头像文件名，
- * 否则两条一模一样的行没法区分该勾哪个。
- */
+/** 按磁盘上的头像文件生成人设选项，note 附带头像文件名。 */
 function listPersonas(directories) {
-    const settings = readJson(settingsPath(directories), {});
+    const settings = readSource(settingsPath(directories));
     const named = settings.power_user?.personas;
     const all = named && typeof named === 'object' ? named : {};
     const files = listAvatarFiles(directories);
 
-    // 头像目录读不到（权限、路径异常）时退回按字典列，宁可多列也别让弹窗空着
-    const avatars = files.length ? files : Object.keys(all);
-
-    return avatars
+    return files
         .map((avatar) => {
             const name = personaNameOf(all[avatar]);
             return {
@@ -198,7 +161,7 @@ function listPersonas(directories) {
 
 /** 本机的 头像文件名 → 人设名。 */
 function localPersonaNames(directories) {
-    const settings = readJson(settingsPath(directories), {});
+    const settings = readSource(settingsPath(directories));
     const all = settings.power_user?.personas;
     if (!all || typeof all !== 'object') return {};
     const out = {};
@@ -207,26 +170,6 @@ function localPersonaNames(directories) {
         if (name) out[avatar] = name;
     }
     return out;
-}
-
-/**
- * 一份 personas.json（本地拼的或刚从网盘拉下来的）里的 头像文件名 → 人设名。
- * 云端文件列表要靠它把「1712345678901.png」显示成人看得懂的名字。
- */
-function personaNamesFromBuffer(buffer) {
-    try {
-        const data = parseBuffer(buffer);
-        const all = data?.personas;
-        if (!all || typeof all !== 'object') return {};
-        const out = {};
-        for (const [avatar, value] of Object.entries(all)) {
-            const name = personaNameOf(value);
-            if (name) out[avatar] = name;
-        }
-        return out;
-    } catch {
-        return {};
-    }
 }
 
 /** 本地虚拟路径：personas/<文件夹名>.json。文件夹名由 paths.buildPersonaIndex 定。 */
@@ -249,14 +192,9 @@ function personaFolderOf(localRel) {
     return String(localRel).slice(PERSONAS_DIR.length + 1, -'.json'.length);
 }
 
-/**
- * 一个人设的全部数据：名字、描述与注入设置、以及它是不是默认人设。
- *
- * avatar 写在文件里而不是只靠路径 —— 换台机器时远端文件夹名（人设名）可能
- * 撞车加了后缀，路径不可靠；文件内容里的头像文件名才是这个人设的真身。
- */
+/** 生成单个人设数据，包含头像文件名、名字、描述、注入设置与默认状态。 */
 function buildPersona(directories, avatar) {
-    const settings = readJson(settingsPath(directories), {});
+    const settings = readSource(settingsPath(directories));
     const power = settings.power_user || {};
     return toBuffer({
         avatar,
@@ -266,11 +204,11 @@ function buildPersona(directories, avatar) {
     });
 }
 
-/** 合并一个人设回本机。只动这一个人设，别人的一个字都不碰。 */
+/** 将单个人设合并到本机配置。 */
 function mergePersona(directories, buffer) {
     const incoming = parseBuffer(buffer);
     const avatar = typeof incoming?.avatar === 'string' ? incoming.avatar.trim() : '';
-    // 头像文件名会被拿去当 settings.json 里的键，也会用来找头像图，必须是干净的一段
+    // 校验头像文件名为合法的单个路径段。
     if (!avatar || /[\\/]/.test(avatar) || avatar === '.' || avatar === '..') {
         throw new Error('人设文件里没有有效的头像文件名，无法合并');
     }
@@ -284,32 +222,18 @@ function mergePersona(directories, buffer) {
         power.persona_descriptions = {};
     }
 
-    const name = personaNameOf(incoming.name);
-    // 名字为空时不要把本机原有的名字擦成空 —— 宁可保留旧名，也别让它变成 [Unnamed Persona]
-    if (name) power.personas[avatar] = name;
-    else if (power.personas[avatar] === undefined) power.personas[avatar] = '';
+    power.personas[avatar] = incoming.name;
+    if (incoming.description === null) delete power.persona_descriptions[avatar];
+    else power.persona_descriptions[avatar] = incoming.description;
 
-    // 描述正常是个对象（description / position / depth / role / lorebook）。
-    // 旧版酒馆与部分迁移来的数据里它是纯字符串，原样丢掉会让人设只剩一个名字，
-    // 所以塞进对象的 description 字段，注入位置那几项沿用本机原有的
-    if (typeof incoming.description === 'string') {
-        const old = power.persona_descriptions[avatar];
-        power.persona_descriptions[avatar] = {
-            ...(old && typeof old === 'object' ? old : {}),
-            description: incoming.description,
-        };
-    } else if (incoming.description && typeof incoming.description === 'object') {
-        power.persona_descriptions[avatar] = incoming.description;
-    }
-
-    // 头像可能还没落地（比如只合并了 persona.json），指过去酒馆开机就找不到这张脸
+    // 仅在头像文件已存在时更新默认人设。
     if (incoming.isDefault === true && hasAvatarFile(directories, avatar)) {
         power.default_persona = avatar;
     }
 
     writeJson(file, settings);
 
-    // 回传给前端热加载 —— 直接写进内存的 power_user 就能立刻在人设面板里看到
+    // 返回合并后的人设字段，供前端刷新。
     return {
         absPath: file,
         data: {
@@ -320,10 +244,7 @@ function mergePersona(directories, buffer) {
     };
 }
 
-/**
- * 范围内的人设各占一个合成文件。folders 是 avatar → 远端文件夹名
- * （由 paths.buildPersonaIndex 算出，两边必须用同一份，否则上传的路径对不上）。
- */
+/** 按选择集生成人设合成文件；folders 为头像文件名到云端目录名的映射。 */
 function listPersonaFiles(directories, selection, folders = {}) {
     return listPersonas(directories)
         .filter(item => selectionHas(selection, item.value))
@@ -333,70 +254,7 @@ function listPersonaFiles(directories, selection, folders = {}) {
         }));
 }
 
-// ---------------------------------------------------------------------------
-// 旧布局：整份 personas.json
-//
-// 早先的版本把所有人设塞进一个 用户人设/personas.json。现在不再往上传这种文件，
-// 但网盘里已经有的那一份还得能读回来 —— 下面两个函数只为兼容旧备份而留。
-// 注意它是"一勾就全都来"的语义，这正是拆成一人一份的原因。
-// ---------------------------------------------------------------------------
-
-function buildPersonas(directories, selection) {
-    const settings = readJson(settingsPath(directories), {});
-    const power = settings.power_user || {};
-    const all = power.personas && typeof power.personas === 'object' ? power.personas : {};
-
-    const personas = {};
-    const descriptions = {};
-    // 名字与描述分居两张字典，取并集遍历 —— 只有描述没有名字的人设（酒馆里显示为
-    // [Unnamed Persona]）也得把描述带上，否则换台机器又是一份空壳
-    const keys = new Set([...Object.keys(all), ...Object.keys(power.persona_descriptions || {})]);
-    for (const avatar of [...keys].sort()) {
-        if (!selectionHas(selection, avatar)) continue;
-        if (all[avatar] !== undefined) personas[avatar] = all[avatar];
-        const description = power.persona_descriptions?.[avatar];
-        if (description) descriptions[avatar] = description;
-    }
-
-    return toBuffer({
-        personas,
-        persona_descriptions: descriptions,
-        // 默认人设没被勾中就不必带，换台机器指向一个不存在的人设只会出错
-        default_persona: personas[power.default_persona] !== undefined ? power.default_persona : null,
-    });
-}
-
-function mergePersonas(directories, buffer) {
-    const incoming = parseBuffer(buffer);
-    const file = settingsPath(directories);
-    const settings = readJson(file, {});
-    if (!settings.power_user || typeof settings.power_user !== 'object') settings.power_user = {};
-    const power = settings.power_user;
-
-    // 逐键合并：本机独有的人设留着，同名的用云端的覆盖
-    power.personas = { ...(power.personas || {}), ...(incoming.personas || {}) };
-    power.persona_descriptions = {
-        ...(power.persona_descriptions || {}),
-        ...(incoming.persona_descriptions || {}),
-    };
-    if (incoming.default_persona) power.default_persona = incoming.default_persona;
-
-    writeJson(file, settings);
-
-    // 回传给前端热加载 —— 直接写进内存的 power_user 就能立刻在人设面板里看到
-    return {
-        absPath: file,
-        data: {
-            personas: power.personas,
-            persona_descriptions: power.persona_descriptions,
-            default_persona: power.default_persona ?? null,
-        },
-    };
-}
-
-// ---------------------------------------------------------------------------
 // API 连接配置
-// ---------------------------------------------------------------------------
 
 function connectionManager(settings) {
     return settings.extension_settings?.connectionManager || {};
@@ -404,7 +262,7 @@ function connectionManager(settings) {
 
 /** 供范围弹窗渲染：配置档 id → 它自己起的名字。 */
 function listApiProfiles(directories) {
-    const settings = readJson(settingsPath(directories), {});
+    const settings = readSource(settingsPath(directories));
     const profiles = connectionManager(settings).profiles;
     if (!Array.isArray(profiles)) return [];
     return profiles
@@ -413,7 +271,7 @@ function listApiProfiles(directories) {
             value: String(profile.id),
             label: String(profile.name || profile.id),
             api: String(profile.api || ''),
-            // 有没有密钥跟着走，界面上要标一下 —— 这关系到换台机器要不要重填
+            // 标注配置档是否引用密钥。
             hasSecret: !!profile['secret-id'],
         }));
 }
@@ -426,7 +284,7 @@ function referencedCredentials(directories, settings, profiles) {
 
     const secrets = [];
     if (secretIds.size) {
-        const stored = readJson(secretsPath(directories), {});
+        const stored = readSource(secretsPath(directories));
         for (const [key, list] of Object.entries(stored)) {
             if (!Array.isArray(list)) continue;
             for (const item of list) {
@@ -453,7 +311,7 @@ function referencedCredentials(directories, settings, profiles) {
 }
 
 function buildApiProfiles(directories, selection) {
-    const settings = readJson(settingsPath(directories), {});
+    const settings = readSource(settingsPath(directories));
     const all = connectionManager(settings).profiles;
     const profiles = (Array.isArray(all) ? all : [])
         .filter(profile => profile?.id && selectionHas(selection, String(profile.id)))
@@ -462,10 +320,7 @@ function buildApiProfiles(directories, selection) {
     return toBuffer({ profiles, ...referencedCredentials(directories, settings, profiles) });
 }
 
-/**
- * 一组密钥里最多只能有一个 active。
- * 合并时本机原本激活的那个优先 —— 从云端拉一份配置不该顺手把当前在用的连接切走。
- */
+/** 每组密钥最多保留一个 active，优先保留本机已激活项。 */
 function normalizeActive(list, localActiveId) {
     let kept = false;
     for (const item of list) {
@@ -474,7 +329,7 @@ function normalizeActive(list, localActiveId) {
         item.active = shouldKeep && !kept;
         if (item.active) kept = true;
     }
-    // 本机原本一个都没激活（全新设备），就让第一个顶上，省得用户还要手动点一下
+    // 本机无已激活项时选中第一项。
     if (!kept && list.length) list[0].active = true;
 }
 
@@ -490,7 +345,7 @@ function mergeApiProfiles(directories, buffer) {
         || (settings.extension_settings.connectionManager = { selectedProfile: null, profiles: [] });
 
     manager.profiles = mergeBy('id', manager.profiles, incoming.profiles);
-    // selectedProfile 是"这台机器现在连着哪个"，属于设备状态，不跟着云端走
+    // 保留本机当前连接的 selectedProfile。
     if (Array.isArray(incoming.proxies) && incoming.proxies.length) {
         settings.proxies = mergeBy('name', settings.proxies, incoming.proxies);
     }
@@ -550,10 +405,7 @@ function apiFolderOf(localRel) {
     return String(localRel).slice(API_DIR.length + 1, -'.json'.length);
 }
 
-/**
- * 单个配置档，文件格式与旧的整份 api-profiles.json 完全一致，只是里面只有一档
- * （连同它引用到的密钥与代理预设）。合并因此可以直接复用 mergeApiProfiles。
- */
+/** 生成单档 API 配置及其密钥与代理设置。 */
 function buildApiProfile(directories, id) {
     return buildApiProfiles(directories, { all: false, selected: [String(id)] });
 }
@@ -568,35 +420,12 @@ function listApiProfileFiles(directories, selection, folders = {}) {
         }));
 }
 
-// ---------------------------------------------------------------------------
-// 注册表
-// ---------------------------------------------------------------------------
-
-// 旧布局：所有人设挤一份、所有 API 配置挤一份。不再产出，只为读回网盘上已有的
-const FILES = {
-    [PERSONAS_FILE]: { group: 'personas', build: buildPersonas, merge: mergePersonas },
-    [API_PROFILES_FILE]: { group: 'apiProfiles', build: buildApiProfiles, merge: mergeApiProfiles },
-};
-
 function isSynthetic(localRel) {
-    return isPersonaPath(localRel)
-        || isApiProfilePath(localRel)
-        || Object.prototype.hasOwnProperty.call(FILES, String(localRel));
+    return isPersonaPath(localRel) || isApiProfilePath(localRel);
 }
 
-/**
- * 某一类范围对应的旧版单文件名，没有就返回空串。
- * 人设与 API 配置都已拆成一项一份，不再有单一文件名 —— 走 listPersonaFiles /
- * listApiProfileFiles。这个函数只剩兼容用途。
- */
-function fileOfGroup(group) {
-    if (group === 'personas' || group === 'apiProfiles') return '';
-    const found = Object.entries(FILES).find(([, meta]) => meta.group === group);
-    return found ? found[0] : '';
-}
-
-/** names 用来把远端那个"人看得懂的名字"反查回真身（头像文件名 / 配置档 id）。 */
-function build(localRel, directories, scope, names) {
+/** 通过 names 将云端名称映射回头像文件名或配置档 id。 */
+function build(localRel, directories, names) {
     if (isPersonaPath(localRel)) {
         const folder = personaFolderOf(localRel);
         const avatar = names?.personas?.toAvatar?.[folder];
@@ -609,26 +438,20 @@ function build(localRel, directories, scope, names) {
         if (!id) throw new Error(`本机找不到这个 API 配置：${folder}`);
         return buildApiProfile(directories, id);
     }
-    const meta = FILES[localRel];
-    if (!meta) throw new Error(`不是合成文件：${localRel}`);
-    return meta.build(directories, scope[meta.group]);
+    throw new Error(`不是合成文件：${localRel}`);
 }
 
 function merge(localRel, directories, buffer) {
     if (isPersonaPath(localRel)) return mergePersona(directories, buffer);
-    // 单档与整份的文件格式一致，合并逻辑照旧
+    // 使用通用配置合并逻辑处理单档文件。
     if (isApiProfilePath(localRel)) return mergeApiProfiles(directories, buffer);
-    const meta = FILES[localRel];
-    if (!meta) throw new Error(`不是合成文件：${localRel}`);
-    return meta.merge(directories, buffer);
+    throw new Error(`不是合成文件：${localRel}`);
 }
 
 module.exports = {
     SETTINGS_FILE,
-    PERSONAS_FILE,
     PERSONAS_DIR,
     PERSONA_FILE,
-    API_PROFILES_FILE,
     API_DIR,
     isSynthetic,
     isPersonaPath,
@@ -639,12 +462,10 @@ module.exports = {
     apiFolderOf,
     apiLocalPath,
     listApiProfileFiles,
-    fileOfGroup,
     build,
     merge,
     listPersonas,
     localPersonaNames,
-    personaNamesFromBuffer,
     listApiProfiles,
     // 供单元测试
     stableJson,

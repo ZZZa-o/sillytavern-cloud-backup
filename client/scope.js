@@ -1,14 +1,6 @@
 /**
- * 备份范围弹窗。
- *
- *   一级：角色卡 / 聊天记录 / 世界书 / 预设 / 美化 / 设置 六个按钮，已选的外边框加粗。
- *   二级：三种形态 ——
- *         角色卡是文件夹列表：一张卡一块，默认收起，展开后是它的聊天记录，逐条可勾。
- *           聊天明细在展开那一刻才向后端要 —— 卡多起来一次性回传能到几百 KB。
- *         世界书是平铺多选列表，带搜索、全选、取消全选。
- *         预设与美化也是文件夹列表：按目录折叠，展开逐个勾具体的预设与主题；
- *           背景图没有明细（都是图片，列出来没意义），只有一个整类开关。
- *         设置没有二级 —— 只有 settings.json 一个文件。
+ * 备份范围弹窗：角色卡、用户人设、预设、美化、世界书和 API 配置。
+ * 角色卡展开后按需加载聊天明细；预设与美化按目录选择，背景图使用整类开关。
  */
 import { Popup, POPUP_TYPE, POPUP_RESULT } from '/scripts/popup.js';
 
@@ -17,21 +9,10 @@ import { characterEntries, worldEntries, currentAvatar, embeddedWorldNames } fro
 import {
     getConfig, scopeEnabled, selectionCount, selectionEmpty,
     getScopeDirs, dirSelection, ensureDirSelection, getChatCount, getSynthList,
-    chatCountsSupplied, synthListsSupplied,
 } from './settings.js';
 import { escHtml, prettyBytes } from './panel.js';
 
-/**
- * 后端没送来这项数据时说的话。
- *
- * 绝不能退回「酒馆里还没有用户人设」那种说法 —— 那是在撒谎，
- * 用户会去翻自己的酒馆找问题，而真正的毛病在服务端插件那一侧。
- */
-const BACKEND_TOO_OLD = '后端插件没有返回这项数据。多半是服务端插件还是旧版，'
-    + '或者更新了文件但没重启酒馆 —— 服务端插件只在酒馆启动时加载一次，光刷新页面没用。'
-    + '请更新 plugins/sillytavern-cloud-backup 后彻底关掉酒馆进程再重开。';
-
-/** 因为已内嵌在角色卡里而没有列出来的世界书数量。 */
+/** 统计已内嵌在角色卡中而隐藏的世界书。 */
 function embeddedWorldCount() {
     return embeddedWorldNames().length;
 }
@@ -41,11 +22,7 @@ function stemOf(avatar) {
     return String(avatar || '').replace(/\.[^.]+$/, '');
 }
 
-/**
- * 触屏设备（手机、平板）。
- * 用指针精度判断而不是 UA —— 带触摸屏的笔记本会被算进来，
- * 代价只是少一次自动聚焦，比误判成桌面直接弹出输入法轻得多。
- */
+/** 通过指针精度识别触屏设备。 */
 function isTouchScreen() {
     return window.matchMedia?.('(pointer: coarse)')?.matches === true;
 }
@@ -68,21 +45,21 @@ const PICKERS = {
         view: 'list',
         entries: () => getSynthList('apiProfiles').map(item => ({
             ...item,
-            // 备份会把这个配置引用的密钥明文一起带上，界面上要说清楚
+            // 标注 API 配置是否包含密钥明文。
             note: item.hasSecret ? '含密钥明文' : '无密钥',
             warn: item.hasSecret,
         })),
     },
 };
 
-// 目录/角色卡的展开状态。键是 `组:标识`，弹窗关掉也留着，下次点进来还是老样子
+// 按「组:标识」保存目录和角色卡的展开状态。
 const expanded = new Set();
 const folderKey = (group, key) => `${group}:${key}`;
 
-// 某个角色的聊天明细。展开那一刻才拉，拉过就留着，反复折叠不再打扰后端
+// 按需加载并缓存角色聊天明细。
 const chatCache = new Map();
 const chatLoading = new Set();
-// 拉失败的原因，按角色目录名记。空列表到底是"没有"还是"没拉到"全靠它分辨
+// 按角色目录名记录聊天明细的加载错误。
 const chatErrors = new Map();
 
 /** 目录里有几项可备份：有明细的按文件数，整类开关的算一项。 */
@@ -143,13 +120,13 @@ function popupHtml() {
 }
 
 /**
- * 打开范围弹窗。返回 true 表示用户点了确定，范围已写进内存配置，调用方负责落盘。
- * 点取消则原样还原，内存配置不留痕迹。
+ * 打开范围弹窗；确认后更新内存配置并返回 true，由调用方落盘。
+ * 取消时还原本次修改。
  */
 export async function openScopePopup() {
     const scope = getConfig().scope;
     const original = JSON.parse(JSON.stringify(scope));
-    // 聊天文件是聊着聊着就多出来的，缓存留到下次打开就是旧的了
+    // 每次打开弹窗时清空聊天明细缓存。
     chatCache.clear();
     chatErrors.clear();
 
@@ -160,7 +137,7 @@ export async function openScopePopup() {
 
     let activeKind = '';
 
-    // ---- 一级 ----
+    // 一级
 
     const renderRoot = () => {
         const enabled = scopeEnabled(scope);
@@ -184,7 +161,7 @@ export async function openScopePopup() {
         openPicker(btn.dataset.kind);
     });
 
-    // ---- 二级：公共外壳 ----
+    // 二级：公共外壳
 
     const searchInput = root.querySelector('.stcb-scope-search');
     const keyword = () => searchInput.value.trim().toLowerCase();
@@ -194,12 +171,11 @@ export async function openScopePopup() {
         activeKind = kind;
         const meta = PICKERS[kind];
         pick('picker-title').textContent = meta.title;
-        // 「仅当前角色」与「含聊天记录」都只对角色卡有意义
+        // 角色卡视图显示「仅当前角色」和「含聊天记录」。
         act('current').hidden = meta.view !== 'cards';
         act('chats').hidden = meta.view !== 'cards';
         searchInput.value = '';
-        // 目录文件夹默认全展开：一共就两个目录，先折叠只会多一次点击。
-        // 角色卡相反 —— 几十上百张，默认收起才看得清全貌（用户明确要的）
+        // 目录视图默认展开，角色卡视图默认收起。
         if (meta.view === 'dirs') {
             for (const dir of getScopeDirs(meta.group)) {
                 if (dir.detail) expanded.add(folderKey(meta.group, dir.key));
@@ -208,8 +184,7 @@ export async function openScopePopup() {
         view('root').hidden = true;
         view('picker').hidden = false;
         renderList();
-        // 手机上别抢焦点 —— 一点进分类就弹出输入法，挡住半屏列表，
-        // 而进来的人十有八九是想直接翻列表，不是想搜索。要搜的自己点搜索框。
+        // 触屏设备跳过搜索框自动聚焦。
         if (!isTouchScreen()) searchInput.focus();
     };
 
@@ -226,7 +201,7 @@ export async function openScopePopup() {
         act('chats').classList.toggle('is-on', !selectionEmpty(scope.chats));
     };
 
-    // ---- 二级 A：角色卡文件夹（展开是它名下的聊天记录） ----
+    // 二级 A：角色卡文件夹（展开是它名下的聊天记录）
 
     /** 聊天在不在范围内：全选态看 skip，精确态看 selected。 */
     const chatChecked = (value) => {
@@ -238,7 +213,7 @@ export async function openScopePopup() {
     const toggleChat = (value, checked) => {
         const chats = scope.chats;
         if (chats.all) {
-            // 全选态下只记"排除了哪几条"，不必把全集列出来 —— 明细本就是按需加载的
+            // 全选模式通过 skip 保存排除的聊天。
             const skip = new Set(chats.skip || []);
             if (checked) skip.delete(value);
             else skip.add(value);
@@ -251,7 +226,7 @@ export async function openScopePopup() {
         chats.selected = [...selected];
     };
 
-    /** 拉某个角色的聊天明细。失败不阻断，展开处给一句话就够。 */
+    /** 加载角色的聊天明细，失败时在展开区域显示错误。 */
     const loadChats = async (stem) => {
         if (chatCache.has(stem) || chatLoading.has(stem)) return;
         chatLoading.add(stem);
@@ -261,8 +236,7 @@ export async function openScopePopup() {
             chatCache.set(stem, Array.isArray(data.entries) ? data.entries : []);
         } catch (error) {
             console.warn('[SillyTavern Cloud Backup] 读取聊天列表失败：', error);
-            // 旧版后端没有 chats/list 这个路由，酒馆会回 404。
-            // 把它和"这个角色真的没聊天"分开，否则用户根本无从下手
+            // 后端缺少 chats/list 接口时显示更新提示。
             chatErrors.set(stem, String(error?.message || error));
             chatCache.set(stem, []);
         } finally {
@@ -279,7 +253,6 @@ export async function openScopePopup() {
             ? entries.filter(item => `${item.label} ${item.value}`.toLowerCase().includes(word))
             : entries;
         const current = currentAvatar();
-        const chatsKnown = chatCountsSupplied();
 
         if (!entries.length) {
             pick('list').innerHTML = `<div class="stcb-scope-empty">${escHtml(meta.empty)}</div>`;
@@ -299,10 +272,10 @@ export async function openScopePopup() {
             const open = expanded.has(folderKey('characters', stem));
 
             const tag = item.value === current ? '<small class="stcb-scope-tag">当前</small>' : '';
-            // 后端没送聊天条数时不能写"无聊天记录" —— 那是在替后端的毛病背锅
+            // 后端未提供聊天统计时显示数据缺失提示。
             const note = count.files
                 ? `${count.files} 条聊天 · ${prettyBytes(count.bytes)}`
-                : (chatsKnown ? '无聊天记录' : '后端未提供聊天数据');
+                : '无聊天记录';
 
             let rows = '';
             if (open) {
@@ -313,7 +286,7 @@ export async function openScopePopup() {
                 } else if (!chats.length) {
                     const failed = chatErrors.get(stem);
                     rows = failed
-                        ? `<div class="stcb-scope-empty is-warn">读取聊天列表失败：${escHtml(failed)}<br>${escHtml(BACKEND_TOO_OLD)}</div>`
+                        ? `<div class="stcb-scope-empty is-warn">读取聊天列表失败：${escHtml(failed)}</div>`
                         : '<div class="stcb-scope-empty">这个角色还没有聊天记录。</div>';
                 } else {
                     rows = chats.map(chat => `<label class="stcb-scope-folder-item">`
@@ -345,7 +318,7 @@ export async function openScopePopup() {
         pick('count').textContent = parts.join('，');
     };
 
-    /** 勾角色卡本身。全勾上记 all，这样以后新导入的卡会自动纳入。 */
+    /** 勾选角色卡；全部选中时保存为 all。 */
     const toggleCard = (avatar, checked) => {
         const selection = scope.characters;
         const entries = characterEntries();
@@ -355,7 +328,7 @@ export async function openScopePopup() {
         applySelection(selection, entries, chosen);
     };
 
-    // ---- 二级 B：平铺列表（世界书） ----
+    // 二级 B：平铺列表（世界书）
 
     const renderEntries = (meta) => {
         const selection = scope[activeKind];
@@ -366,18 +339,13 @@ export async function openScopePopup() {
             : entries;
 
         if (!entries.length) {
-            // 人设与 API 配置全靠后端送。后端没送来就直说，别谎报"你没有"
-            const stale = (activeKind === 'personas' || activeKind === 'apiProfiles')
-                && !synthListsSupplied();
-            pick('list').innerHTML = stale
-                ? `<div class="stcb-scope-empty is-warn">${escHtml(BACKEND_TOO_OLD)}</div>`
-                : `<div class="stcb-scope-empty">${escHtml(meta.empty)}</div>`;
+            pick('list').innerHTML = `<div class="stcb-scope-empty">${escHtml(meta.empty)}</div>`;
         } else if (!visible.length) {
             pick('list').innerHTML = '<div class="stcb-scope-empty">没有匹配的条目。</div>';
         } else {
             pick('list').innerHTML = visible.map(item => {
                 const checked = selection.all || selection.selected.includes(item.value);
-                // note 是"这本书没备份到"的警告
+                // 显示世界书的备份提示。
                 const tag = item.note
                     ? `<small class="stcb-scope-tag${item.warn ? ' is-warn' : ''}">${escHtml(item.note)}</small>`
                     : '';
@@ -393,15 +361,15 @@ export async function openScopePopup() {
             parts.push(`已选 ${chosen} / ${entries.length}`);
             if (keyword()) parts.push(`筛选出 ${visible.length} 条`);
         }
-        // 世界书列表里藏掉的那些要交代清楚，否则用户会以为插件漏了书
+        // 显示已隐藏的内嵌世界书数量。
         if (activeKind === 'worlds') {
             const hidden = embeddedWorldCount();
-            if (hidden) parts.push(`另有 ${hidden} 本已内嵌在角色卡里，随角色卡一起备份`);
+            if (hidden) parts.push(`已内嵌 ${hidden} 本，随角色卡备份`);
         }
         pick('count').textContent = parts.join('，');
     };
 
-    /** 勾选状态变了就重算选择集：全勾上记 all，这样以后新导入的条目会自动纳入。 */
+    /** 重新计算选择集，全部选中时保存为 all。 */
     const commitFromCheckboxes = () => {
         const meta = PICKERS[activeKind];
         const selection = scope[activeKind];
@@ -417,7 +385,7 @@ export async function openScopePopup() {
         renderList();
     };
 
-    // ---- 二级 B：文件夹列表（预设、美化） ----
+    // 二级 B：文件夹列表（预设、美化）
 
     const renderFolders = (meta) => {
         const group = meta.group;
@@ -454,11 +422,11 @@ export async function openScopePopup() {
             const matched = word
                 ? entries.filter(item => `${item.label} ${item.value}`.toLowerCase().includes(word))
                 : entries;
-            // 搜索时一条都没匹配上的目录整个收起来，免得满屏空分组
+            // 隐藏无搜索结果的目录。
             if (word && !matched.length) continue;
             visibleFiles += matched.length;
 
-            // 搜索时强制展开，否则搜到了却看不见
+            // 搜索时展开匹配目录。
             const open = !!word || expanded.has(folderKey(group, dir.key));
             const rows = matched.length
                 ? matched.map(item => {
@@ -500,7 +468,7 @@ export async function openScopePopup() {
             + ` value="${escHtml(file)}"${checked ? ' checked' : ''}>`;
     };
 
-    /** 整目录开关：勾上就是"这个目录全都要"，以后新存的预设也自动纳入。 */
+    /** 整目录选择保存为 all，包含后续新增文件。 */
     const toggleDir = (group, key, checked) => {
         const selection = ensureDirSelection(scope, group, key);
         selection.all = checked;
@@ -516,7 +484,7 @@ export async function openScopePopup() {
         applySelection(selection, entries, chosen);
     };
 
-    // ---- 二级：事件 ----
+    // 二级：事件
 
     pick('list').addEventListener('change', event => {
         const box = event.target;
@@ -538,8 +506,7 @@ export async function openScopePopup() {
         commitFromCheckboxes();
     });
 
-    // details 那套点标题就折叠的默认行为在这里不合用 —— 勾选框就摆在标题上，
-    // 点它是"整个目录全要"或"要这张卡"，顺带把文件夹收起来只会让人以为勾错了。折叠自己管。
+    // 阻止 summary 默认点击行为，分别处理勾选和折叠。
     pick('list').addEventListener('click', event => {
         if (event.target.matches('input[type="checkbox"]')) return;
         const head = event.target.closest('.stcb-scope-folder-head[data-act="fold"]');
@@ -551,7 +518,7 @@ export async function openScopePopup() {
         if (meta.view === 'cards') {
             key = folderKey('characters', folder.dataset.stem);
         } else if (meta.view === 'dirs') {
-            // 搜索时一律展开，这会儿折叠只会让人以为没搜到
+            // 搜索期间保持目录展开。
             if (keyword()) return;
             key = folderKey(meta.group, folder.dataset.dir);
         } else {
@@ -574,7 +541,7 @@ export async function openScopePopup() {
                 showRoot();
                 return;
             case 'all':
-                // 搜索状态下只全选筛选结果，符合"先搜再批量勾"的直觉
+                // 搜索时仅选择匹配项。
                 setVisible(true);
                 return;
             case 'none':
@@ -589,8 +556,7 @@ export async function openScopePopup() {
                 return;
             }
             case 'chats': {
-                // 一键把所选角色的聊天全带上 / 全撤下。
-                // 已经带上时（哪怕只是零星几条）再点就是清空，符合"这个开关管带不带聊天"的直觉
+                // 切换所选角色的全部聊天：已有聊天选择时清空，否则全选。
                 const on = !selectionEmpty(scope.chats);
                 scope.chats.all = !on;
                 scope.chats.selected = [];
@@ -612,8 +578,7 @@ export async function openScopePopup() {
         }
 
         if (meta.view === 'cards') {
-            // 只作用于角色卡本身。聊天由「含聊天记录」统一管 ——
-            // 大部分卡还没展开，它们的聊天明细压根不在 DOM 里，这里一把梭只会漏掉一半
+            // 全选与取消全选仅作用于角色卡。
             for (const box of boxes) {
                 if (box.dataset.role === 'card') toggleCard(box.value, checked);
             }
@@ -624,8 +589,7 @@ export async function openScopePopup() {
         const searching = !!keyword();
         for (const box of boxes) {
             if (box.dataset.role === 'dir') {
-                // 搜索时有明细的目录交给下面的文件框逐个处理，
-                // 整目录一把梭会把没筛出来的文件也勾上
+                // 搜索时按匹配的文件更新选择集。
                 if (searching && box.dataset.detail === 'true') continue;
                 toggleDir(meta.group, box.dataset.dir, checked);
             } else {
@@ -641,9 +605,7 @@ export async function openScopePopup() {
         okButton: '确定',
         cancelButton: '取消',
         allowVerticalScrolling: true,
-        // 在某一类的明细列表里，「确定」「取消」（连同 Esc）都只是这一层的收工，
-        // 该退回六个按钮那一屏接着挑下一类 —— 一路弹回酒馆扩展页，
-        // 想选第二类就得从头再点一遍备份范围。返回 false 即取消关闭，show() 的 promise 不会兑现。
+        // 二级视图确认或取消时返回分类页；返回 false 保持弹窗打开。
         onClosing: () => {
             if (!activeKind) return true;
             showRoot();
@@ -659,7 +621,7 @@ export async function openScopePopup() {
     return true;
 }
 
-/** 勾满了就记 all，这样以后新增的条目会自动纳入；否则老实记下具体选了哪些。 */
+/** 全部选中时保存 all，其余情况保存 selected。 */
 function applySelection(selection, entries, chosen) {
     const kept = entries.filter(item => chosen.has(item.value)).map(item => item.value);
     if (entries.length > 0 && kept.length === entries.length) {
@@ -672,18 +634,16 @@ function applySelection(selection, entries, chosen) {
 }
 
 function buttonLabel(kind, scope) {
-    // 一类都没有时按钮上只写类别名 —— 有没有东西点进去一眼就看得见，
-    // 「（无）」既占宽度又没多说什么
+    // 类别为空时仅显示类别名。
     switch (kind) {
         case 'characters': {
             const total = characterEntries().length;
             if (!total) return '角色卡';
             const count = scope.characters.all ? total : scope.characters.selected.length;
-            // 聊天记录长在这个菜单里，选中态也要在按钮上交代一句
+            // 在角色卡按钮上显示聊天选择状态。
             const chats = selectionEmpty(scope.chats) ? '' : ' + 聊天';
             if (!count) return '角色卡';
-            // 全选与逐个勾满在按钮上一律写数字：「全部 12」和「12」说的是同一件事，
-            // 多出来的两个字在手机上会把两列按钮挤下去
+            // 用数量标注选中项。
             return `角色卡（${count}${chats}）`;
         }
         case 'worlds': {

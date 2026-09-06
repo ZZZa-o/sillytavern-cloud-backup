@@ -1,13 +1,6 @@
 /**
- * 端到端加密的单元测试。
- *
- *   node tools/encryption-test.js
- *
- * 这里验的每一条错了都会毁数据，所以必须由机器跑而不是靠眼睛看：
- *   往返一致   密文解回来必须��原文逐字节相同，二进制（png）也一样
- *   降级读     明文数据走 decrypt 要原样返回，否则手动传上网盘的文件就废了
- *   错口令     必须抛错，且绝不能吐出半截数据
- *   keycheck   口令不对时 ok 为假且 key 为 null —— 调用方靠它拦住下载
+ * 文件加密测试：加解密往返、明文兼容、错误口令及 keycheck 校验。
+ * 运行：node tools/encryption-test.js
  */
 const assert = require('node:assert');
 const crypto = require('node:crypto');
@@ -41,7 +34,7 @@ test('文本往返后逐字节相同', () => {
 });
 
 test('二进制往返后逐字节相同', () => {
-    // 拿真实 png 的文件头打底，后面接一段随机数据 —— 角色卡就是这个形状
+    // 使用 PNG 文件头和随机字节构造二进制样本。
     const png = Buffer.concat([
         Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
         crypto.randomBytes(4096),
@@ -109,7 +102,7 @@ test('密文被改动一个字节就解不开（GCM 认证生效）', () => {
 
 test('认证标签被改动也解不开', () => {
     const cipher = encryption.encrypt(Buffer.from('tag', 'utf8'), KEY);
-    cipher[18] ^= 0xff; // 落在 tag 区间（5 魔数 + 12 iv 之后）
+    cipher[18] ^= 0xff; // 修改认证标签区域的字节。
     assert.throws(() => encryption.decrypt(cipher, KEY), /口令不正确|已损坏/);
 });
 

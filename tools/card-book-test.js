@@ -1,11 +1,6 @@
 /**
- * 角色卡 png 解析的单元测试。
- *
- *   node tools/card-book-test.js
- *
- * 测的是「这张卡里内嵌了哪本世界书」这个判断。它必须由后端读 png 得出：
- * 酒馆开了 performance.lazyLoadCharacters 之后，前端拿到的角色数据里
- * data.character_book 被整个丢掉，只靠前端判会把内嵌的书全部误列出来。
+ * 角色卡 PNG 解析与内嵌世界书识别测试。
+ * 运行：node tools/card-book-test.js
  */
 const assert = require('node:assert');
 const path = require('node:path');
@@ -28,9 +23,7 @@ function test(name, fn) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // 造一张最小可用的 png：签名 + IHDR + 若干 tEXt + IDAT + IEND
-// ---------------------------------------------------------------------------
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -63,7 +56,7 @@ function textChunk(keyword, text) {
     ]));
 }
 
-/** 角色卡数据是 base64 过的 UTF-8 JSON，所以中文书名也能原样带回来。 */
+/** 角色卡数据使用 base64 编码的 UTF-8 JSON。 */
 function cardChunk(keyword, card) {
     return textChunk(keyword, Buffer.from(JSON.stringify(card), 'utf8').toString('base64'));
 }
@@ -78,7 +71,7 @@ function makePng(...textChunks) {
         PNG_SIGNATURE,
         chunk('IHDR', ihdr),
         ...textChunks,
-        // 酒馆写卡数据时是插在 IEND 之前的，这里也照这个顺序摆
+        // 将角色卡数据块插入 IEND 之前。
         chunk('IDAT', zlib.deflateSync(Buffer.from([0, 0]))),
         chunk('IEND', Buffer.alloc(0)),
     ]);
@@ -87,7 +80,6 @@ function makePng(...textChunks) {
 const withBook = name => ({ name: '角色甲', data: { name: '角色甲', character_book: { name, entries: [] } } });
 const withoutBook = { name: '角色乙', data: { name: '角色乙' } };
 
-// ---------------------------------------------------------------------------
 
 console.log('\n[1] tEXt 块解析');
 
@@ -107,7 +99,7 @@ test('截断的文件读到哪算哪，不抛异常也不死循环', () => {
     const png = makePng(textChunk('chara', 'aGVsbG8='));
     const truncated = png.subarray(0, png.length - 12);
     assert.strictEqual(cards.extractTextChunks(truncated).chara, 'aGVsbG8=');
-    // 连块头都不完整时直接收工
+    // 测试截断的 PNG 块头。
     assert.deepStrictEqual(cards.extractTextChunks(png.subarray(0, 20)), {});
 });
 

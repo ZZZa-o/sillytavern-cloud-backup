@@ -1,63 +1,45 @@
 /**
- * 下载后的热刷新：让新文件立刻出现在酒馆里，不用整页重载。
- *
- * 走的都是酒馆自己的入口，和手动导入是同一条路：
- *   角色卡        getCharacters()
- *   世界书        updateWorldInfoList()
- *   预设 / 主题    getSettings() —— 重拉 /api/settings/get，酒馆据此重建各个下拉框
- *   背景图        getBackgrounds()
- *   用户人设      直接写内存的 power_user，再 getUserAvatars() 重绘人设面板
- *
- * 只有两样东西没有热加载入口，需要让用户刷新页面：快速回复（QR 扩展的 loadSets 没有导出）
- * 和 API 连接配置（connection-manager 扩展一个函数都没导出）。
+ * 下载后刷新角色卡、世界书、主题、预设、背景与人设列表。
+ * 快速回复和 API 配置通过提示引导用户刷新页面。
  */
-import { getCharacters, saveSettingsDebounced, getSettings } from '/script.js';
+import { getCharacters, saveSettingsDebounced, getRequestHeaders } from '/script.js';
 import { updateWorldInfoList } from '/scripts/world-info.js';
-import { power_user } from '/scripts/power-user.js';
+import { power_user, loadPowerUserSettings, applyPowerUserSettings } from '/scripts/power-user.js';
+import { loadOpenAISettings } from '/scripts/openai.js';
 import { getBackgrounds } from '/scripts/backgrounds.js';
 import { getUserAvatars, setPersonaDescription, user_avatar } from '/scripts/personas.js';
 
 import { notify } from './panel.js';
 
-// ---------------------------------------------------------------------------
 // 让刚下载的角色卡排在列表最前面
-// ---------------------------------------------------------------------------
 
 const SORT_FIELD = 'date_added';
 const SORT_ORDER = 'desc';
 const SORT_OPTION_ID = 'stcb-sort-recent';
 
-/**
- * 往酒馆的角色排序下拉框里补一个「最近导入」。
- *
- * 酒馆自带的排序选项里没有一个是按文件落到本机的时间排的 ——
- * 「Newest」用的是 create_date，那是卡里作者自己填的时间，跟什么时候下载的无关。
- * 唯一可用的是 date_added（后端取 png 的 ctime），但它不在下拉框里，
- * 直接改 power_user 会让下拉框变空白、用户也没法切回 A-Z，所以先把选项补上。
- */
+/** 添加按 date_added（角色卡文件的 ctime）排序的「最近导入」选项。 */
 export function ensureRecentSortOption() {
     const select = $('#character_sort_order');
     if (!select.length || document.getElementById(SORT_OPTION_ID)) return;
 
-    // 必须用 attr 写 data-*：酒馆的 change 处理器是拿 .data('field') 读的
+    // 通过 data-* 属性提供排序字段。
     select.append($('<option>')
         .attr('id', SORT_OPTION_ID)
         .attr('data-field', SORT_FIELD)
         .attr('data-order', SORT_ORDER)
         .text('最近导入'));
 
-    // 酒馆在页面加载时就按 power_user 选中过一次，那会儿这个选项还不存在，这里补选
+    // 根据当前排序设置恢复下拉框选中项。
     if (power_user.sort_field === SORT_FIELD && power_user.sort_order === SORT_ORDER) {
         $(`#${SORT_OPTION_ID}`).prop('selected', true);
     }
 }
 
-/** 把角色列表切成「最近导入」排序，让刚下载的卡出现在第一个。 */
+/** 将角色列表切换为「最近导入」排序。 */
 function sortByRecent() {
     power_user.sort_field = SORT_FIELD;
     power_user.sort_order = SORT_ORDER;
-    // 必须清掉：上一次若是「收藏」排序会留下 sort_rule='boolean'，
-    // 那条分支按真假值比较，套到时间戳上排出来的顺序是错的
+    // 清除旧排序规则。
     power_user.sort_rule = null;
 
     ensureRecentSortOption();
@@ -65,30 +47,79 @@ function sortByRecent() {
     saveSettingsDebounced();
 }
 
-// ---------------------------------------------------------------------------
-// 按下载到的类别刷新
-// ---------------------------------------------------------------------------
+// 从 /api/settings/get 读取主题与 OpenAI 预设列表。
 
-// /api/settings/get 的响应里带着这些目录的全部内容，重拉一次酒馆就会重建对应的下拉框。
-// 不在这张表里的两个：backgrounds 有自己的接口，QuickReplies 由 QR 扩展自己读且没留入口。
-const SETTINGS_DIRS = ['OpenAI Settings', 'themes'];
+/** 读取酒馆设置，调用 loadPowerUserSettings 和 loadOpenAISettings 更新列表。 */
+async function reloadSettingsLists(needThemes, needPresets) {
+    const response = await fetch('/api/settings/get', {
+        method: 'POST',
+        headers: getRequestHeaders(),
+        body: JSON.stringify({}),
+        cache: 'no-cache',
+    });
+    if (!response.ok) throw new Error(`读取酒馆设置失败：HTTP ${response.status}`);
+
+    const data = await response.json();
+    const settings = JSON.parse(data.settings);
+
+    if (needThemes) {
+        await loadPowerUserSettings(settings, data);
+        applyPowerUserSettings();
+        // 列表加载完成后按 value 去重，并恢复选中项。
+        dedupeOptions('#themes', power_user.theme);
+        dedupeOptions('#movingUIPresets', power_user.movingUIPreset);
+    }
+
+    if (needPresets) {
+        // 重新填充 OpenAI 预设下拉框。
+        loadOpenAISettings(data, settings.oai_settings ?? settings);
+    }
+}
+
+/** 同 value 的选项保留最后一项，并恢复指定选中值。 */
+function dedupeOptions(selector, selectedValue) {
+    const select = document.querySelector(selector);
+    if (!select) return;
+
+    const seen = new Set();
+    for (let i = select.options.length - 1; i >= 0; i--) {
+        const option = select.options[i];
+        if (seen.has(option.value)) option.remove();
+        else seen.add(option.value);
+    }
+    if (seen.has(selectedValue)) select.value = selectedValue;
+}
+
+// 按下载到的类别刷新
 
 /**
- * 按下载到的类别刷新对应列表。
- * result 是后端的下载结果（touched / touchedDirs / personaData）。
- * 返回一句给用户看的话；没有任何需要说明的就返回空串。
+ * 按下载结果中的 touched、touchedDirs 和 personaData 刷新对应列表。
+ * 返回刷新结果提示；无需提示时返回空串。
  */
 export async function reloadTouched(result) {
-    const touched = result?.touched || result;
-    if (!touched) return '';
-
-    const dirs = Array.isArray(result?.touchedDirs) ? result.touchedDirs : [];
+    const { touched, touchedDirs: dirs } = result;
     const refreshed = [];
+    const stale = [];
+
+    // 先加载主题与预设，再设置角色排序并刷新角色列表。
+    const needThemes = dirs.includes('themes');
+    const needPresets = dirs.includes('OpenAI Settings');
+    if (needThemes || needPresets) {
+        try {
+            await reloadSettingsLists(needThemes, needPresets);
+            if (needThemes) refreshed.push('美化');
+            if (needPresets) refreshed.push('预设');
+        } catch (error) {
+            console.warn('[SillyTavern Cloud Backup] 刷新美化与预设失败：', error);
+            // 记录刷新失败的类别。
+            if (needThemes) stale.push('美化');
+            if (needPresets) stale.push('预设');
+        }
+    }
 
     if (touched.characters > 0) {
         try {
-            // 顺序要紧：getCharacters 内部最后会调 printCharacters(true)，
-            // 排序必须在那之前设好，否则列表还是按旧规则画的
+            // 先设置角色排序，再重新获取并渲染角色列表。
             sortByRecent();
             await getCharacters();
             refreshed.push('角色列表');
@@ -115,16 +146,6 @@ export async function reloadTouched(result) {
         }
     }
 
-    if (dirs.some(dir => SETTINGS_DIRS.includes(dir))) {
-        try {
-            await getSettings();
-            if (touched.presets > 0) refreshed.push('预设');
-            if (touched.themes > 0) refreshed.push('美化');
-        } catch (error) {
-            console.warn('[SillyTavern Cloud Backup] 刷新预设与美化失败：', error);
-        }
-    }
-
     if (dirs.includes('backgrounds')) {
         try {
             await getBackgrounds();
@@ -138,21 +159,17 @@ export async function reloadTouched(result) {
         notify('success', `${refreshed.join('、')}已刷新`);
     }
 
-    // 聊天文件不用管：酒馆的「管理聊天文件」是现读的，落盘即可见。
+    // 聊天列表由酒馆的「管理聊天文件」读取。
 
-    const stale = [];
     if (touched.apiProfiles > 0) stale.push('API 配置');
     if (dirs.includes('QuickReplies')) stale.push('快速回复');
 
-    return stale.length ? `${stale.join('、')}需要刷新页面才生效。` : '';
+    return stale.length ? `请刷新页面加载${stale.join('、')}。` : '';
 }
 
 /**
- * 人设热加载。
- *
- * 后端把合并后的三个字段带了回来，直接写进内存的 power_user，
- * 再让酒馆重绘人设面板即可 —— 面板上的名字读的就是 power_user.personas。
- * data 缺失（旧响应）时退化成只重绘，至少新下载的头像能露出来。
+ * 将合并后的人设字段写入 power_user，再重绘人设面板。
+ * 缺少 data 时仅重绘面板。
  */
 async function reloadPersonas(data) {
     if (data && typeof data === 'object') {
@@ -163,8 +180,7 @@ async function reloadPersonas(data) {
 
     await getUserAvatars(true);
 
-    // 当前正用着的这个人设，描述可能刚被云端版本改掉了。
-    // 单数的 persona_description* 是它的展开值，不同步刷一下的话输入框里还是旧文本。
+    // 同步当前人设的 persona_description* 字段与描述输入框。
     const current = power_user.persona_descriptions?.[user_avatar];
     if (current) {
         power_user.persona_description = current.description ?? '';

@@ -1,10 +1,6 @@
 /**
- * 离开页面前落盘守卫的单元测试。
- *
- *   node tools/flush-guard-test.mjs
- *
- * client/flush-guard.js 是 ES module（浏览器里由酒馆 import），
- * 所以这份测试用 .mjs，好在 type: commonjs 的包里直接跑。
+ * 离开页面前保存条件的单元测试。
+ * 运行：node tools/flush-guard-test.mjs
  */
 import assert from 'node:assert';
 import { shouldFlushChat, chatLoadedAfterEvent } from '../client/flush-guard.js';
@@ -23,7 +19,7 @@ function test(name, fn) {
     }
 }
 
-/** 一个各项都正常、应该放行的状态。各用例只改自己关心的那一项。 */
+/** 各用例共用的有效聊天状态。 */
 function okState(overrides = {}) {
     return {
         thisChid: 3,
@@ -47,11 +43,11 @@ test('酒馆正在写盘时不落盘', () => {
     assert.strictEqual(shouldFlushChat(okState({ isChatSaving: true })), false);
 });
 
-test('流式生成中不落盘 —— 半截回复不该被固化进存档', () => {
+test('流式生成期间跳过保存', () => {
     assert.strictEqual(shouldFlushChat(okState({ isStreaming: true })), false);
 });
 
-test('本次会话没加载过聊天就不落盘，免得空白覆盖真存档', () => {
+test('聊天尚未加载时跳过保存', () => {
     assert.strictEqual(shouldFlushChat(okState({ chatLoaded: false })), false);
 });
 
@@ -69,7 +65,7 @@ test('this_chid 为 0 是合法角色下标，第一张卡照样落盘', () => {
     );
 });
 
-test('加载后切了角色就不落盘，否则会把 A 的内容写进 B 的文件', () => {
+test('加载后切换角色时跳过保存', () => {
     assert.strictEqual(
         shouldFlushChat(okState({ thisChid: 5, loadedThisChid: 3 })),
         false,
@@ -113,7 +109,7 @@ test('CHAT_LOADED 一律算加载完成', () => {
     assert.strictEqual(chatLoadedAfterEvent('loaded', true), true);
 });
 
-test('群聊只发 CHAT_CHANGED，必须认它', () => {
+test('群聊收到 CHAT_CHANGED 时标记加载完成', () => {
     assert.strictEqual(chatLoadedAfterEvent('changed', true), true);
 });
 

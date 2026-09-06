@@ -1,25 +1,16 @@
-/**
- * SillyTavern 前端扩展入口。各文件分工：
- *
- *   index.js       入口：建面板、绑事件（本文件）
- *   api.js         后端调用与角色名映射
- *   settings.js    配置内存副本与范围判定
- *   panel.js       面板 HTML、状态栏与格式化
- *   scope.js       备份范围弹窗（一级四类 → 二级多选）
- *   cloud.js       云端文件管理
- *   actions.js     全部动作：保存、测试、预览、上传、下载、自动执行
- *   flush-guard.js 离开页面前该不该逼酒馆落盘（纯函数）
- */
+/** SillyTavern 前端扩展入口：初始化面板，绑定配置、备份与聊天事件。 */
 import { eventSource, event_types } from '/script.js';
 
-import { buildPanel, readFormIntoConfig } from './panel.js';
+import { buildPanel, readFormIntoConfig, setAutoStatus } from './panel.js';
 import { pushConfig } from './settings.js';
 import {
     bootstrap, saveConfig, testConnection, editScope,
-    previewBackup, runUpload, runDownload,
-    autoQueue, autoTimer, setGenerating,
     switchProfile, createProfile, renameActiveProfile, deleteActiveProfile,
 } from './actions.js';
+import {
+    previewBackup, runUpload, runDownload, autoQueue, setGenerating,
+    startBackupMonitor, resetBackupMonitor, queueChanges,
+} from './backup.js';
 import {
     refreshCloud, downloadSelected, deleteSelected, renderCloud,
     toggleItem, toggleGroup, noteToggle, toggleSort, toggleLink, filterByCurrentCharacter,
@@ -29,29 +20,27 @@ import { shouldFlushChat, chatLoadedAfterEvent } from './flush-guard.js';
 
 const AUTO_INPUTS = ['#stcb-auto-enabled', '#stcb-auto-events', '#stcb-auto-minutes'].join(', ');
 
-/*
- * 触发一次"该检查是否自动上传了"的酒馆事件。
- *
- * 没有 MESSAGE_SWIPED —— 重 roll 时它在生成开始前就发出来了，
- * 那时新回复还没影子，赶着上传只会把上一轮的状态传上去。用户选定哪一条之后，
- * 总会跟着一次 MESSAGE_SENT 或切聊天，那时再传不迟。
- */
+/* 触发自动上传检查的酒馆事件。 */
 const CHAT_EVENTS = [
     'MESSAGE_SENT',
     'MESSAGE_RECEIVED',
     'MESSAGE_EDITED',
     'MESSAGE_DELETED',
+    'MESSAGE_SWIPED',
+    'MESSAGE_UPDATED',
     'CHAT_CHANGED',
     'CHAT_CREATED',
     'GROUP_CHAT_CREATED',
 ];
 
-// ---------------------------------------------------------------------------
-// 离开页面前把聊天落盘
-//
-// 自动上传扫的是磁盘上的 .jsonl，而聊天在酒馆内存里 —— 关标签页时最后几条
-// 消息未必已经写下去。所以先喊酒馆自己存一次，存不存得成由 flush-guard 判定。
-// ---------------------------------------------------------------------------
+const CHANGE_EVENTS = [
+    'SETTINGS_UPDATED', 'WORLDINFO_UPDATED', 'CHARACTER_EDITED', 'CHARACTER_DELETED',
+    'CHARACTER_RENAMED', 'PERSONA_CHANGED', 'PRESET_CHANGED', 'PRESET_DELETED', 'PRESET_RENAMED',
+    'CONNECTION_PROFILE_CREATED', 'CONNECTION_PROFILE_UPDATED', 'CONNECTION_PROFILE_DELETED',
+    'SECRET_WRITTEN', 'SECRET_EDITED', 'SECRET_DELETED', 'SECRET_ROTATED',
+];
+
+// 离开页面前保存本地聊天，由 flush-guard 判定是否可执行。
 
 let chatLoadedThisSession = false;
 let loadedThisChid = null;
@@ -59,22 +48,15 @@ let loadedSelectedGroup = null;
 let leaveFlushInFlight = false;
 
 function ctx() {
-    try {
-        if (typeof SillyTavern !== 'undefined' && typeof SillyTavern.getContext === 'function') {
-            return SillyTavern.getContext();
-        }
-    } catch (error) {
-        console.warn('[SillyTavern Cloud Backup] 取 context 失败：', error);
-    }
-    return {};
+    return SillyTavern.getContext();
 }
 
-/** 记下"聊天加载完成那一刻停在哪个角色/群组"，供之后比对有没有切走。 */
+/** 记录聊天加载完成时的角色或群组。 */
 function rememberLoadedEntity(loaded) {
     const c = ctx();
     chatLoadedThisSession = loaded;
-    loadedThisChid = loaded ? (c.characterId ?? c.this_chid ?? null) : null;
-    loadedSelectedGroup = loaded ? (c.groupId ?? c.selected_group ?? null) : null;
+    loadedThisChid = loaded ? c.characterId : null;
+    loadedSelectedGroup = loaded ? c.groupId : null;
 }
 
 let generating = false;
@@ -82,34 +64,25 @@ let generating = false;
 function flushState() {
     const c = ctx();
     return {
-        thisChid: c.characterId ?? c.this_chid,
-        selectedGroup: c.groupId ?? c.selected_group,
+        thisChid: c.characterId,
+        selectedGroup: c.groupId,
         loadedThisChid,
         loadedSelectedGroup,
         chatLoaded: chatLoadedThisSession,
         isChatSaving: !!c.isChatSaving,
-        // 自己记的这个标志比翻 context 里的内部对象可靠
+        // 使用事件维护的生成状态。
         isStreaming: generating,
     };
 }
 
-/**
- * 只做本地落盘，不碰云端。
- *
- * pagehide 之后浏览器随时可能把页面冻掉，一次 WebDAV 往返根本没保证跑得完；
- * 而 saveChatConditional 是酒馆自己的同步存盘路径，快得多。云端那一趟留给
- * 下次启动或定时器 —— 那时磁盘上已经是完整的，传上去的才是对的。
- */
+/** 调用酒馆的 saveChatConditional 保存本地聊天。 */
 async function flushChatOnLeave() {
     if (leaveFlushInFlight) return;
     if (!shouldFlushChat(flushState())) return;
 
-    const save = ctx().saveChatConditional;
-    if (typeof save !== 'function') return;
-
     leaveFlushInFlight = true;
     try {
-        await save();
+        await ctx().saveChatConditional();
     } catch (error) {
         console.warn('[SillyTavern Cloud Backup] 离开前落盘失败：', error);
     } finally {
@@ -119,46 +92,40 @@ async function flushChatOnLeave() {
 
 function bindTavernEvents() {
     for (const name of CHAT_EVENTS) {
-        const event = event_types[name];
-        if (event) eventSource.on(event, () => autoQueue('auto-chat'));
+        eventSource.on(event_types[name], () => autoQueue('auto-chat'));
+    }
+    for (const name of CHANGE_EVENTS) {
+        eventSource.on(event_types[name], () => queueChanges());
     }
 
-    // 生成中不上传，也不落盘 —— 这会儿最后一条消息是半截的
-    if (event_types.GENERATION_STARTED) {
-        eventSource.on(event_types.GENERATION_STARTED, () => {
-            generating = true;
-            setGenerating(true);
-        });
-    }
+    // 生成期间暂停上传与离开页面前的保存。
+    eventSource.on(event_types.GENERATION_STARTED, () => {
+        generating = true;
+        setGenerating(true);
+    });
     for (const name of ['GENERATION_ENDED', 'GENERATION_STOPPED']) {
-        const event = event_types[name];
-        if (event) {
-            eventSource.on(event, () => {
-                generating = false;
-                setGenerating(false);
-            });
-        }
-    }
-
-    // 单人聊天：CHAT_CHANGED 之后还会来一发 CHAT_LOADED，以后者为准。
-    // 群聊：只发 CHAT_CHANGED，永远等不到 CHAT_LOADED，必须认它
-    if (event_types.CHAT_CHANGED) {
-        eventSource.on(event_types.CHAT_CHANGED, () => {
-            const c = ctx();
-            const group = c.groupId ?? c.selected_group;
-            const hasGroup = group !== undefined && group !== null && group !== '';
-            rememberLoadedEntity(chatLoadedAfterEvent('changed', hasGroup));
+        eventSource.on(event_types[name], () => {
+            generating = false;
+            setGenerating(false);
         });
     }
-    // 老版本 context 可能没导出这个键，事件名本身是稳定的
-    eventSource.on(event_types.CHAT_LOADED || 'chatLoaded', () => {
+
+    // 单人聊天以 CHAT_LOADED 为加载完成事件；群聊使用 CHAT_CHANGED。
+    eventSource.on(event_types.CHAT_CHANGED, () => {
+        const group = ctx().groupId;
+        const hasGroup = group !== undefined && group !== null && group !== '';
+        rememberLoadedEntity(chatLoadedAfterEvent('changed', hasGroup));
+    });
+    eventSource.on(event_types.CHAT_LOADED, () => {
         rememberLoadedEntity(chatLoadedAfterEvent('loaded', false));
     });
 
-    // 手机上切后台比关标签页常见得多，两个都要接
+    // 监听页面隐藏和切到后台事件。
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'hidden') void flushChatOnLeave();
+        else queueChanges(0);
     });
+    window.addEventListener('focus', () => queueChanges(0));
     window.addEventListener('pagehide', () => { void flushChatOnLeave(); });
 }
 
@@ -168,10 +135,11 @@ function bindEvents() {
     on('stcb-save-config', saveConfig);
     on('stcb-test', testConnection);
 
-    // 勾上才展开口令框。只管显隐，不落盘 —— 加密开关跟着「保存配置」一起生效，
-    // 免得用户刚勾上还没填口令就被后端拒绝连接
+    // 按加密开关显示口令框与说明，设置随「保存配置」生效。
     $('#stcb-encrypt').on('change', function () {
-        $('#stcb-encrypt-fields').prop('hidden', !$(this).prop('checked'));
+        const on = $(this).prop('checked');
+        $('#stcb-encrypt-fields').prop('hidden', !on);
+        $('#stcb-encrypt-note').prop('hidden', !on);
     });
     on('stcb-scope', editScope);
 
@@ -185,10 +153,11 @@ function bindEvents() {
     on('stcb-preview', previewBackup);
     on('stcb-upload', () => runUpload('manual'));
     on('stcb-download', runDownload);
+    $('#stcb-root .inline-drawer-header').on('click', () => queueChanges(0));
 
     on('stcb-cloud-refresh', () => refreshCloud(true));
-    on('stcb-cloud-download', downloadSelected);
-    on('stcb-cloud-delete', deleteSelected);
+    on('stcb-cloud-download', async () => { await downloadSelected(); queueChanges(0); });
+    on('stcb-cloud-delete', async () => { await deleteSelected(); queueChanges(0); });
     on('stcb-cloud-sort', function () {
         const mode = toggleSort();
         $(this).find('span').text(mode === 'time' ? '按时间' : '按路径');
@@ -203,45 +172,38 @@ function bindEvents() {
         if (group) toggleGroup(group, this.checked);
         else toggleItem(this.value, this.checked);
     });
-    // 联动开关长在分组标题里，点它不该顺带把 details 展开或收起
+    // 点击联动开关时阻止分组折叠。
     $('#stcb-cloud-list').on('click', 'button[data-act="link"]', function (event) {
         event.preventDefault();
         event.stopPropagation();
         toggleLink();
     });
-    // details 的展开状态得自己记，重渲染会把 DOM 整个换掉。
-    // toggle 事件不冒泡，jQuery 的事件委托接不到，只能用捕获阶段。
+    // 在捕获阶段监听 toggle，记录分组展开状态。
     document.querySelector('#stcb-cloud-list')?.addEventListener('toggle', event => {
         const details = event.target?.closest?.('details.stcb-cloud-group');
         if (details) noteToggle(details.dataset.group, details.open);
     }, true);
 
-    // 自动执行的开关改完就落盘，不必再点一次保存配置
+    // 自动上传设置修改后立即保存。
     $(AUTO_INPUTS).on('change', async () => {
         readFormIntoConfig();
-        autoTimer();
         try {
             await pushConfig();
+            await resetBackupMonitor();
         } catch (error) {
-            console.warn('[SillyTavern Cloud Backup] 保存自动执行设置失败：', error);
+            setAutoStatus(`保存自动上传设置失败：${error.message}`, 'error');
         }
     });
 
-    // 面板每次重建都会重绑上面那些（它们挂在新 DOM 上），但酒馆事件与 window
-    // 监听器是全局的，重复绑会叠加成好几份，热重载插件时就会发生
-    if (!window.__stcbTavernBound) {
-        window.__stcbTavernBound = true;
-        bindTavernEvents();
-    }
+    bindTavernEvents();
 }
 
 jQuery(async () => {
     buildPanel();
     bindEvents();
-    // 排序选项要早点补上：用户上次就停在「最近导入」的话，
-    // 酒馆已经按它排好了列表，下拉框却因为找不到这个选项而显示空白
+    // 初始化「最近导入」排序选项。
     ensureRecentSortOption();
     renderCloud();
     await bootstrap();
-    autoTimer();
+    startBackupMonitor();
 });

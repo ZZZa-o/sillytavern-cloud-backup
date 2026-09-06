@@ -1,16 +1,7 @@
 /**
- * WebDAV 端点探测：把一次失败拆成逐步的真实状态码，指出到底卡在哪一步。
- *
- *   cd ~/SillyTavern && node plugins/sillytavern-cloud-backup/tools/webdav-probe.js
- *
- * 专治「WebDAV PUT 失败 (405)：Method Not Allowed」这类只报最后一步的错。
- * ensureRoot/ensureDir 把 MKCOL 的 405 当作"目录已存在"（webdav.js:111、:130），
- * 服务端若压根不认 WebDAV 方法，会对每个 MKCOL 都回 405 而被静默走过，
- * 一路到 PUT 才炸 —— 这个脚本把那层掩盖捅开。
- *
- * 直接复用插件自己的 config.js 与 buildRemoteUrl，保证 URL 构造与真实备份完全一致。
- * 远端只在测试目录里写一个临时探测文件，跑完即删，不碰任何已有文件。
- * 用户名与密码全程打码，输出可以直接贴出来。
+ * 逐步检查 WebDAV 端点、目录创建、上传、回读和清理。
+ * 运行：node plugins/sillytavern-cloud-backup/tools/webdav-probe.js
+ * 使用插件连接配置，在测试目录创建并删除临时文件；输出中的凭据已打码。
  */
 const path = require('node:path');
 
@@ -18,7 +9,6 @@ const PLUGIN_DIR = path.resolve(__dirname, '..');
 const config = require(path.join(PLUGIN_DIR, 'server', 'config.js'));
 const webdav = require(path.join(PLUGIN_DIR, 'server', 'webdav.js'));
 
-// ---------------------------------------------------------------------------
 
 function findUserRoot() {
     const fs = require('node:fs');
@@ -52,7 +42,7 @@ function authHeaders(cfg) {
     return { Authorization: `Basic ${Buffer.from(raw, 'utf8').toString('base64')}` };
 }
 
-/** 发一个请求，永不抛异常 —— 把状态码、关键响应头、响应体片段原样带回来。 */
+/** 发送请求并返回状态码、响应头和响应体片段，异常转换为结果。 */
 async function probe(url, method, { headers = {}, body } = {}) {
     try {
         const response = await fetch(url, { method, headers, body });
@@ -81,7 +71,6 @@ function verdict(result, good) {
     return `${result.status}${flag}`;
 }
 
-// ---------------------------------------------------------------------------
 
 (async () => {
     const root = findUserRoot();
@@ -109,8 +98,7 @@ function verdict(result, good) {
     console.log('密码       :', mask(cfg.password));
     console.log('完整目标   :', webdav.buildRemoteUrl(cfg).replace(/\/\/[^@/]*@/, '//***@'));
 
-    // ---- 1. 这个端点到底认不认 WebDAV ----
-    // Allow 头是最直接的证据：里面没有 PUT，405 就跟插件无关。
+    // 检查端点支持的 WebDAV 方法。
     line('1. OPTIONS —— 服务器自报支持哪些方法');
     for (const [label, url] of [
         ['URL 根       ', `${target.protocol}//${target.host}/`],
@@ -128,8 +116,7 @@ function verdict(result, good) {
         }
     }
 
-    // ---- 2. 路径逐层下探 ----
-    // 飞牛这类 NAS 常要求 URL 里带上共享文件夹名，少一层就落到不认 DAV 的位置。
+    // 逐层检查远端路径。
     line('2. PROPFIND 逐层下探 —— 找出哪一层还是 WebDAV');
     const urlParts = target.pathname.split('/').filter(Boolean);
     const remoteParts = webdav.splitRemotePath(cfg.remotePath);
@@ -145,8 +132,7 @@ function verdict(result, good) {
         if (r.ok && r.status !== 207 && r.body) console.log(`      ${r.body.slice(0, 160)}`);
     }
 
-    // ---- 3. MKCOL 每层的真实状态码 ----
-    // 插件把 405 当"已存在"。这里区分：目录真存在（PROPFIND 207）还是方法不被支持。
+    // 检查 MKCOL 状态，并通过 PROPFIND 验证目录是否存在。
     line('3. MKCOL 建备份目录 —— 405 到底是"已存在"还是"不支持"');
     for (let i = 1; i <= remoteParts.length; i++) {
         const slice = remoteParts.slice(0, i);
@@ -163,7 +149,7 @@ function verdict(result, good) {
         if (mk.ok && mk.body) console.log(`      ${mk.body.slice(0, 160)}`);
     }
 
-    // ---- 4. 真正的 PUT ----
+    // 4. 真正的 PUT
     line('4. PUT 一个临时探测文件 —— 复现那个 405');
     const name = `.probe-${Date.now()}.txt`;
     const payload = Buffer.from('sillytavern-cloud-backup probe\n', 'utf8');
@@ -185,7 +171,7 @@ function verdict(result, good) {
         if (put.status === 409) console.log('      ← 409：父目录不存在，说明第 3 步的 MKCOL 其实没建成');
     }
 
-    // ---- 5. 回读并清理 ----
+    // 5. 回读并清理
     if (put.ok && [200, 201, 204].includes(put.status)) {
         line('5. GET 回读并删除临时文件');
         const get = await probe(fileUrl, 'GET', { headers: auth });

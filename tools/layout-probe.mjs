@@ -1,9 +1,6 @@
 /**
- * 只读探针：量一量云端文件区各元素的真实渲染宽度。
- *
- *   node "C:/Users/JOE/Documents/酒馆webdav插件/tools/layout-probe.mjs"
- *
- * 只读取几何信息，不点任何按钮、不触发任何备份动作。
+ * 测量云端文件区域的元素宽度。
+ * 运行：node tools/layout-probe.mjs
  */
 import { chromium } from 'file:///C:/Users/JOE/Documents/novel-injector/node_modules/playwright-core/index.mjs';
 
@@ -30,7 +27,7 @@ page.on('response', response => {
 });
 await page.goto('http://127.0.0.1:8000/', { waitUntil: 'domcontentloaded' });
 
-// 扩展是异步加载的，等面板挂进 DOM。抽屉默认收起，所以只能等 attached 不能等 visible
+// 等待扩展面板挂载到 DOM。
 try {
     await page.waitForSelector('#stcb-root', { state: 'attached', timeout: 45000 });
 } catch {
@@ -63,7 +60,7 @@ const report = await page.evaluate(() => {
     const root = document.querySelector('#stcb-root');
     if (!root) return { error: '面板未渲染（插件没加载？）' };
 
-    // 只为测量把祖先链摊开：抽屉收起时宽度全是 0。纯视觉改动，不写任何用户数据
+    // 临时展开祖先元素以测量尺寸。
     for (let el = root; el && el !== document.body; el = el.parentElement) {
         if (getComputedStyle(el).display === 'none') el.style.display = 'block';
     }

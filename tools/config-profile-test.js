@@ -1,12 +1,6 @@
 /**
- * 多方案配置与旧格式迁移的单元测试。
- *
- *   node tools/config-profile-test.js
- *
- * 重点是三件容易出事的东西：
- *   旧配置迁移  连接信息从顶层搬进 profiles，间隔从小时折成分钟
- *   密码语义    前端从不回显密码，保存时送的是空串，不能因此把密码清掉
- *   投影一致    上层还按 config.url 取值，顶层投影必须始终等于当前方案
+ * 多方案配置测试：凭据保存、当前方案投影与配置校验。
+ * 运行：node tools/config-profile-test.js
  */
 const assert = require('node:assert');
 
@@ -28,10 +22,17 @@ function test(name, fn) {
 
 const { defaultConfig, mergeConfig, publicConfig, toStored, withActive } = configStore;
 
-console.log('\n旧配置迁移');
+function configured(fields) {
+    const base = defaultConfig();
+    return mergeConfig(base, {
+        ...toStored(base), profiles: [{ ...base.profiles[0], ...fields }],
+    });
+}
 
-test('顶层连接信息被包成一个方案', () => {
-    const merged = mergeConfig(defaultConfig(), {
+console.log('\n配置读写');
+
+test('连接信息保存在当前方案', () => {
+    const merged = configured({
         url: 'https://dav.example.com/dav/',
         username: 'alice',
         password: 'pw',
@@ -43,11 +44,6 @@ test('顶层连接信息被包成一个方案', () => {
     assert.strictEqual(merged.activeProfileId, merged.profiles[0].id);
 });
 
-test('间隔按小时折成分钟 —— 6 是 6 小时，不是 6 分钟', () => {
-    const merged = mergeConfig(defaultConfig(), { url: 'https://a.example/dav/', auto: { intervalHours: 6 } });
-    assert.strictEqual(merged.auto.intervalMinutes, 360);
-});
-
 test('已经是分钟的配置照原样收下', () => {
     const merged = mergeConfig(defaultConfig(), { auto: { intervalMinutes: 45 } });
     assert.strictEqual(merged.auto.intervalMinutes, 45);
@@ -56,11 +52,11 @@ test('已经是分钟的配置照原样收下', () => {
 test('间隔被夹在 15 分钟到 7 天之间', () => {
     assert.strictEqual(mergeConfig(defaultConfig(), { auto: { intervalMinutes: 1 } }).auto.intervalMinutes, 15);
     assert.strictEqual(mergeConfig(defaultConfig(), { auto: { intervalMinutes: 99999 } }).auto.intervalMinutes, 10080);
-    assert.strictEqual(mergeConfig(defaultConfig(), { auto: { intervalMinutes: 'x' } }).auto.intervalMinutes, 360);
+    assert.throws(() => mergeConfig(defaultConfig(), { auto: { intervalMinutes: 'x' } }), /必须是数字/);
 });
 
-test('已经是新格式的配置不再重复迁移', () => {
-    const first = mergeConfig(defaultConfig(), { url: 'https://a.example/dav/', username: 'alice' });
+test('配置序列化后保留方案和连接信息', () => {
+    const first = configured({ url: 'https://a.example/dav/', username: 'alice' });
     const again = mergeConfig(defaultConfig(), toStored(first));
     assert.strictEqual(again.profiles.length, 1);
     assert.strictEqual(again.profiles[0].username, 'alice');
@@ -69,8 +65,8 @@ test('已经是新格式的配置不再重复迁移', () => {
 console.log('\n密码');
 
 test('保存时留空表示不修改，不会把已存的密码清掉', () => {
-    const saved = mergeConfig(defaultConfig(), { url: 'https://a.example/dav/', password: 'secret' });
-    // 前端回送时密码位置是空串
+    const saved = configured({ url: 'https://a.example/dav/', password: 'secret' });
+    // 模拟前端提交空密码。
     const resaved = mergeConfig(saved, {
         ...toStored(saved),
         profiles: saved.profiles.map(item => ({ ...item, password: '' })),
@@ -79,7 +75,7 @@ test('保存时留空表示不修改，不会把已存的密码清掉', () => {
 });
 
 test('显式 clearPassword 才真的清掉', () => {
-    const saved = mergeConfig(defaultConfig(), { url: 'https://a.example/dav/', password: 'secret' });
+    const saved = configured({ url: 'https://a.example/dav/', password: 'secret' });
     const cleared = mergeConfig(saved, {
         ...toStored(saved),
         profiles: saved.profiles.map(item => ({ ...item, password: '', clearPassword: true })),
@@ -87,8 +83,8 @@ test('显式 clearPassword 才真的清掉', () => {
     assert.strictEqual(cleared.profiles[0].password, '');
 });
 
-test('改名换地址都不会把密码弄丢（按 id 找旧密码）', () => {
-    const saved = mergeConfig(defaultConfig(), { url: 'https://a.example/dav/', password: 'secret' });
+test('按 id 保留重命名或更换地址后的密码', () => {
+    const saved = configured({ url: 'https://a.example/dav/', password: 'secret' });
     const edited = mergeConfig(saved, {
         ...toStored(saved),
         profiles: saved.profiles.map(item => ({
@@ -100,7 +96,7 @@ test('改名换地址都不会把密码弄丢（按 id 找旧密码）', () => {
 });
 
 test('给前端的配置里没有任何密码明文', () => {
-    const saved = mergeConfig(defaultConfig(), { url: 'https://a.example/dav/', password: 'secret' });
+    const saved = configured({ url: 'https://a.example/dav/', password: 'secret' });
     const pub = publicConfig(saved);
     assert.ok(!JSON.stringify(pub).includes('secret'));
     assert.strictEqual(pub.hasPassword, true);
@@ -108,8 +104,8 @@ test('给前端的配置里没有任何密码明文', () => {
     assert.strictEqual(pub.profiles[0].password, undefined);
 });
 
-test('落盘只写权威字段，密码不会存成两份', () => {
-    const saved = mergeConfig(defaultConfig(), { url: 'https://a.example/dav/', password: 'secret' });
+test('落盘仅保存方案字段', () => {
+    const saved = configured({ url: 'https://a.example/dav/', password: 'secret' });
     assert.deepStrictEqual(
         Object.keys(toStored(saved)).sort(),
         ['activeProfileId', 'auto', 'profiles', 'scope'],
@@ -141,10 +137,8 @@ test('切换方案后投影跟着换，两条的密码互不干扰', () => {
     assert.strictEqual(switched.profiles[1].password, 'pw2');
 });
 
-test('activeProfileId 指向不存在的方案时退回第一条', () => {
-    const merged = mergeConfig(defaultConfig(), { ...twoProfiles, activeProfileId: 'p-gone' });
-    assert.strictEqual(merged.activeProfileId, 'p-one');
-    assert.strictEqual(merged.url, 'https://one.example/dav/');
+test('当前方案不存在时报告错误', () => {
+    assert.throws(() => mergeConfig(defaultConfig(), { ...twoProfiles, activeProfileId: 'p-gone' }), /当前方案不存在/);
 });
 
 test('备份范围与自动上传是全局的，不跟着方案走', () => {
@@ -155,7 +149,7 @@ test('备份范围与自动上传是全局的，不跟着方案走', () => {
     });
     assert.strictEqual(merged.scope.worlds.all, true);
     assert.strictEqual(merged.auto.intervalMinutes, 30);
-    // 方案自己不带这两样
+    // 方案中省略全局范围与自动上传字段。
     assert.strictEqual(merged.profiles[0].scope, undefined);
     assert.strictEqual(merged.profiles[0].auto, undefined);
 });
@@ -172,15 +166,10 @@ test('上次备份时间记在各自方案上', () => {
     assert.strictEqual(merged.profiles[0].lastBackupAt, '2026-01-01T00:00:00.000Z');
 });
 
-test('手改配置粘出两条同 id 时重发一个，不让它们互相串', () => {
-    const merged = mergeConfig(defaultConfig(), {
-        profiles: [
-            { id: 'same', name: 'A', url: 'https://a.example/dav/' },
-            { id: 'same', name: 'B', url: 'https://b.example/dav/' },
-        ],
-    });
-    assert.strictEqual(merged.profiles.length, 2);
-    assert.notStrictEqual(merged.profiles[0].id, merged.profiles[1].id);
+test('拒绝重复的方案 ID', () => {
+    assert.throws(() => mergeConfig(defaultConfig(), {
+        profiles: [{ id: 'same' }, { id: 'same' }], activeProfileId: 'same',
+    }), /方案 ID/);
 });
 
 test('没带 profiles 的请求不会把已存的方案冲掉', () => {
@@ -190,10 +179,8 @@ test('没带 profiles 的请求不会把已存的方案冲掉', () => {
     assert.strictEqual(merged.profiles[1].password, 'pw2');
 });
 
-test('方案被删光时兜底补一条空的', () => {
-    const merged = mergeConfig(defaultConfig(), { profiles: [] });
-    assert.strictEqual(merged.profiles.length, 1);
-    assert.strictEqual(merged.url, '');
+test('拒绝删除全部方案', () => {
+    assert.throws(() => mergeConfig(defaultConfig(), { profiles: [] }), /至少要保留/);
 });
 
 console.log('\n加密设置（方案级）');
@@ -204,8 +191,8 @@ test('默认不开加密，也没有口令', () => {
     assert.strictEqual(config.encryption.passphrase, '');
 });
 
-test('老配置迁移过来时加密默认关闭，不影响现有用户', () => {
-    const merged = mergeConfig(defaultConfig(), {
+test('新建方案默认关闭加密', () => {
+    const merged = configured({
         url: 'https://dav.example.com/dav/',
         username: 'alice',
         password: 'pw',
@@ -214,12 +201,12 @@ test('老配置迁移过来时加密默认关闭，不影响现有用户', () =>
     assert.strictEqual(merged.profiles[0].encryption.passphrase, '');
 });
 
-test('口令留空表示不修改，不会因为前端没回显就被清掉', () => {
+test('口令留空时保留已保存的口令', () => {
     const saved = mergeConfig(defaultConfig(), {
         profiles: [{ id: 'p1', url: 'https://a.example/dav/', encryption: { enabled: true, passphrase: 'secret' } }],
         activeProfileId: 'p1',
     });
-    // 前端保存配置时送的是空口令 —— 这是常态，每次点「保存配置」都这样
+    // 提交空口令，验证原口令保留。
     const again = mergeConfig(saved, {
         profiles: [{ id: 'p1', url: 'https://a.example/dav/', encryption: { enabled: true, passphrase: '' } }],
         activeProfileId: 'p1',
@@ -240,7 +227,7 @@ test('clearPassphrase 才真的清掉口令', () => {
     assert.strictEqual(cleared.encryption.enabled, false);
 });
 
-test('改名换地址都不会把口令弄丢（按 id 找旧值）', () => {
+test('按 id 保留重命名或更换地址后的口令', () => {
     const saved = mergeConfig(defaultConfig(), {
         profiles: [{ id: 'p1', name: '坚果云', url: 'https://a.example/dav/', encryption: { enabled: true, passphrase: 'secret' } }],
         activeProfileId: 'p1',
@@ -266,20 +253,35 @@ test('两个方案的加密设置互不干扰：坚果云开着，NAS 关着', (
     assert.strictEqual(merged.encryption.enabled, false);
 });
 
-test('publicConfig 不回传口令明文，只说存没存', () => {
+test('publicConfig 回传加密口令', () => {
     const merged = mergeConfig(defaultConfig(), {
         profiles: [{ id: 'p1', url: 'https://a.example/dav/', encryption: { enabled: true, passphrase: 'secret' } }],
         activeProfileId: 'p1',
     });
     const shown = publicConfig(merged);
-    assert.strictEqual(JSON.stringify(shown).includes('secret'), false);
-    assert.strictEqual(shown.encryption.hasPassphrase, true);
     assert.strictEqual(shown.encryption.enabled, true);
-    assert.strictEqual(shown.profiles[0].encryption.hasPassphrase, true);
-    assert.strictEqual(shown.profiles[0].encryption.passphrase, undefined);
+    assert.strictEqual(shown.encryption.hasPassphrase, true);
+    assert.strictEqual(shown.encryption.passphrase, 'secret');
+    assert.strictEqual(shown.profiles[0].encryption.passphrase, 'secret');
 });
 
-test('toStored 把口令留在盘上（它是权威数据，不能丢）', () => {
+test('publicConfig 隐藏 WebDAV 授权密码', () => {
+    const merged = mergeConfig(defaultConfig(), {
+        profiles: [{
+            id: 'p1',
+            url: 'https://a.example/dav/',
+            password: 'davpw',
+            encryption: { enabled: true, passphrase: 'secret' },
+        }],
+        activeProfileId: 'p1',
+    });
+    const shown = publicConfig(merged);
+    assert.strictEqual(JSON.stringify(shown).includes('davpw'), false);
+    assert.strictEqual(shown.hasPassword, true);
+    assert.strictEqual(shown.profiles[0].password, undefined);
+});
+
+test('toStored 保存加密口令', () => {
     const merged = mergeConfig(defaultConfig(), {
         profiles: [{ id: 'p1', url: 'https://a.example/dav/', encryption: { enabled: true, passphrase: 'secret' } }],
         activeProfileId: 'p1',

@@ -1,10 +1,6 @@
 /**
- * 备份核心逻辑的单元测试。
- *
- *   node tools/backup-logic-test.js
- *
- * 只测纯函数：路径映射、范围判定、上传/下载计划。
- * server/ 下这些模块只依赖 Node 内置模块，不需要指向 SillyTavern 的 node_modules。
+ * 备份核心逻辑测试：路径映射、范围判定与上传下载计划。
+ * 运行：node tools/backup-logic-test.js
  */
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -30,7 +26,7 @@ function test(name, fn) {
     }
 }
 
-// 常用夹具：角色甲的 png 文件名是一串乱码，正是本插件要解决的场景
+// 角色夹具：使用不同的角色名和 PNG 文件名。
 const NAMES = paths.buildNameIndex({
     'k7f2q9x1.png': '角色甲',
     'm3p8w5.png': '角色乙',
@@ -55,10 +51,7 @@ const ALL_SCOPE = {
 
 const scopeWith = patch => ({ ...ALL_SCOPE, ...patch });
 
-/**
- * 本机认识哪些人设（头像文件名 → 人设名）。
- * 判定头像在不在范围内要靠它认出"这张脸本机有没有" —— 本机没有的只可能来自云端。
- */
+/** 本机人设名称映射：头像文件名到人设名。 */
 const namesWithPersonas = byAvatar => ({
     ...paths.buildNameIndex({}),
     personas: {
@@ -67,7 +60,7 @@ const namesWithPersonas = byAvatar => ({
     },
 });
 
-// 本机有两个人设，两张脸都认识
+// 本机已登记两个人设。
 const LOCAL_PERSONAS = namesWithPersonas({ 'mine.png': '我', '别人的.png': '别人' });
 
 /** 预设/美化：只改其中一个目录，其余保持全选。 */
@@ -124,8 +117,8 @@ console.log('\n[2] 云端七个文件夹');
 
 test('七类各自落到自己的文件夹', () => {
     assert.strictEqual(paths.toRemote('worlds/世界书甲.json', NAMES), '世界书/世界书甲.json');
-    assert.strictEqual(paths.toRemote('personas.json', NAMES), '用户人设/personas.json');
-    assert.strictEqual(paths.toRemote('api-profiles.json', NAMES), 'API配置/api-profiles.json');
+    assert.strictEqual(paths.toRemote('personas/我.json', NAMES), '用户人设/我/persona.json');
+    assert.strictEqual(paths.toRemote('api-profiles/配置甲.json', NAMES), 'API配置/配置甲.json');
     assert.ok(paths.toRemote('characters/m3p8w5.png', NAMES).startsWith('角色卡/'));
     assert.ok(paths.toRemote('chats/m3p8w5/x.jsonl', NAMES).startsWith('聊天记录/'));
     assert.strictEqual(paths.toRemote('QuickReplies/默认.json', NAMES), '预设/QuickReplies/默认.json');
@@ -173,9 +166,9 @@ test('每一类都能原样还原', () => {
         'QuickReplies/默认.json',
         'themes/暗色.json',
         'backgrounds/风景 图.jpg',
-        'personas.json',
+        'personas/我.json',
         'User Avatars/user-default.png',
-        'api-profiles.json',
+        'api-profiles/配置甲.json',
     ];
     for (const local of samples) {
         const remote = paths.toRemote(local, NAMES);
@@ -184,7 +177,7 @@ test('每一类都能原样还原', () => {
 });
 
 test('预设与美化的第二层认白名单，串组或穿目录一律拒绝', () => {
-    // 白名单本身就是越界防护：不在这一组里的目录名根本还原不出本地路径
+    // 拒绝预设或美化所属组以外的目录。
     assert.strictEqual(paths.toLocal('预设/../../etc/passwd', NAMES), null);
     assert.strictEqual(paths.toLocal('美化/../personas.json', NAMES), null);
     assert.strictEqual(paths.toLocal('预设/themes/x.json', NAMES), null, '主题不属于预设组');
@@ -194,7 +187,7 @@ test('预设与美化的第二层认白名单，串组或穿目录一律拒绝',
     assert.strictEqual(paths.toLocal('预设/OpenAI Settings', NAMES), null, '只到目录名不是文件');
 });
 
-test('换台机器没有同名角色时，按角色名新建而不是丢内容', () => {
+test('本机没有同名角色时按角色名新建', () => {
     const empty = paths.buildNameIndex({});
     assert.strictEqual(paths.toLocal('角色卡/角色甲.png', empty), 'characters/角色甲.png');
     assert.strictEqual(paths.toLocal('聊天记录/角色甲/x.jsonl', empty), 'chats/角色甲/x.jsonl');
@@ -213,8 +206,8 @@ test('全选时六类都在范围内', () => {
     assert.strictEqual(paths.inScope('worlds/世界书甲.json', ALL_SCOPE), true);
     assert.strictEqual(paths.inScope('OpenAI Settings/我的预设.json', ALL_SCOPE), true);
     assert.strictEqual(paths.inScope('themes/暗色.json', ALL_SCOPE), true);
-    assert.strictEqual(paths.inScope('personas.json', ALL_SCOPE), true);
-    assert.strictEqual(paths.inScope('api-profiles.json', ALL_SCOPE), true);
+    assert.strictEqual(paths.inScope('personas/我.json', ALL_SCOPE), true);
+    assert.strictEqual(paths.inScope('api-profiles/配置甲.json', ALL_SCOPE), true);
 });
 
 test('只选一张角色卡时，别的角色卡与它的聊天都被排除', () => {
@@ -238,7 +231,7 @@ test('聊天可以逐条勾：只勾中的那条进范围', () => {
     });
     assert.strictEqual(paths.inScope('chats/k7f2q9x1/2026-08-01 12h30m.jsonl', scope), true);
     assert.strictEqual(paths.inScope('chats/k7f2q9x1/2026-07-01 09h00m.jsonl', scope), false);
-    // 逐条模式下群聊无从跟随，不带
+    // 逐条聊天模式排除群聊。
     assert.strictEqual(paths.inScope('group chats/群甲/x.jsonl', scope), false);
 });
 
@@ -255,7 +248,7 @@ test('没勾角色卡时，它的聊天一条都不传', () => {
         characters: { all: false, selected: ['k7f2q9x1.png'] },
         chats: { all: false, selected: ['m3p8w5/x.jsonl'], skip: [] },
     });
-    // 聊天被显式勾了，但它的角色卡没勾 —— 云端不该出现无主的聊天记录
+    // 未选择角色卡时排除其聊天。
     assert.strictEqual(paths.inScope('chats/m3p8w5/x.jsonl', scope), false);
 });
 
@@ -282,16 +275,15 @@ test('人设与 API 配置各自按项勾选', () => {
         personas: { all: false, selected: ['mine.png'] },
         apiProfiles: { all: false, selected: [] },
     });
-    assert.strictEqual(paths.inScope('personas.json', only), true, '选了人设就要传人设数据');
+    assert.strictEqual(paths.inScope('personas/我.json', only), true, '选了人设就要传人设数据');
     assert.strictEqual(paths.inScope('User Avatars/mine.png', only, LOCAL_PERSONAS), true);
     assert.strictEqual(paths.inScope('User Avatars/别人的.png', only, LOCAL_PERSONAS), false,
         '本机认识这张脸，没勾就是没勾');
-    assert.strictEqual(paths.inScope('api-profiles.json', only), false, '一个配置档都没勾');
+    assert.strictEqual(paths.inScope('api-profiles/配置甲.json', only), false, '一个配置档都没勾');
 });
 
-test('云端来的新人设，脸与名字必须一起进范围', () => {
-    // 本机只有 mine.png 一个人设，盛茵兰那张脸本机从没见过 ——
-    // 选择集里列的都是本机的头像文件名，不可能含有它
+test('云端新人设的头像与数据同时纳入范围', () => {
+    // 仅登记 mine.png，另一个头像来自云端。
     const only = scopeWith({ personas: { all: false, selected: ['mine.png'] } });
     const localOnly = namesWithPersonas({ 'mine.png': '我' });
 
@@ -312,7 +304,7 @@ test('范围之外的路径一律拒绝', () => {
     assert.strictEqual(paths.inScope('backups/x.zip', ALL_SCOPE), false);
     assert.strictEqual(paths.inScope('.st-sync/index.json', ALL_SCOPE), false);
     assert.strictEqual(paths.inScope('secrets.json', ALL_SCOPE), false);
-    // 已经不备份的目录，哪怕全选也进不来
+    // 全选时仍排除未支持的目录。
     assert.strictEqual(paths.inScope('instruct/Alpaca.json', ALL_SCOPE), false);
     assert.strictEqual(paths.inScope('movingUI/layout.json', ALL_SCOPE), false);
 });
@@ -397,9 +389,9 @@ test('每类文件都能归到正确的类别', () => {
     assert.strictEqual(paths.categoryOf('chats/角色甲/x.jsonl'), 'chats');
     assert.strictEqual(paths.categoryOf('group chats/群甲/x.jsonl'), 'chats');
     assert.strictEqual(paths.categoryOf('groups/g1.json'), 'chats');
-    assert.strictEqual(paths.categoryOf('personas.json'), 'personas');
+    assert.strictEqual(paths.categoryOf('personas/我.json'), 'personas');
     assert.strictEqual(paths.categoryOf('User Avatars/x.png'), 'personas');
-    assert.strictEqual(paths.categoryOf('api-profiles.json'), 'apiProfiles');
+    assert.strictEqual(paths.categoryOf('api-profiles/配置甲.json'), 'apiProfiles');
     assert.strictEqual(paths.categoryOf('settings.json'), 'other');
     assert.strictEqual(paths.categoryOf('OpenAI Settings/x.json'), 'presets');
     assert.strictEqual(paths.categoryOf('QuickReplies/默认.json'), 'presets');
@@ -423,7 +415,7 @@ const DIRECTORIES = {
     openAI_Settings: '/data/user/OpenAI Settings',
     quickreplies: '/data/user/QuickReplies',
     themes: '/data/user/themes',
-    // backgrounds 故意不给：酒馆没建过的目录不该被当成要扫的根
+    // 省略 backgrounds，模拟目录尚未创建。
 };
 
 test('全选时，夹具提供的目录都要扫', () => {
@@ -477,8 +469,8 @@ test('相对路径能还原成绝对路径', () => {
         path.resolve('/data/user/characters/k7f2q9x1.png'),
     );
     // 合成文件最终读写的都是 settings.json
-    assert.strictEqual(paths.localAbsPath(DIRECTORIES, 'personas.json'), path.join('/data/user', 'settings.json'));
-    assert.strictEqual(paths.localAbsPath(DIRECTORIES, 'api-profiles.json'), path.join('/data/user', 'settings.json'));
+    assert.strictEqual(paths.localAbsPath(DIRECTORIES, 'personas/我.json'), path.join('/data/user', 'settings.json'));
+    assert.strictEqual(paths.localAbsPath(DIRECTORIES, 'api-profiles/配置甲.json'), path.join('/data/user', 'settings.json'));
     assert.strictEqual(paths.localAbsPath(DIRECTORIES, 'settings.json'), null, '整份设置已不在备份范围内');
     assert.strictEqual(
         paths.localAbsPath(DIRECTORIES, 'OpenAI Settings/我的预设.json'),
@@ -549,7 +541,7 @@ test('范围外的文件不进任何清单', () => {
 test('计划摘要带计数且长列表会截断', () => {
     const many = {};
     for (let i = 0; i < 45; i++) many[`worlds/w${i}.json`] = 'v1';
-    const summary = summarizePlan(plan(many, {}));
+    const summary = summarizePlan(plan(many, {}), NAMES);
     assert.strictEqual(summary.counts.upload, 45);
     assert.strictEqual(summary.upload.length, 40);
     assert.strictEqual(summary.truncated, true);
@@ -564,7 +556,7 @@ test('全新安装什么都不勾，一个目录都不用扫', () => {
         'characters/k7f2q9x1.png', 'chats/k7f2q9x1/x.jsonl', 'worlds/世界书甲.json',
         'OpenAI Settings/我的预设.json', 'QuickReplies/默认.json',
         'themes/暗色.json', 'backgrounds/风景.jpg',
-        'personas.json', 'User Avatars/x.png', 'api-profiles.json',
+        'personas/我.json', 'User Avatars/x.png', 'api-profiles/配置甲.json',
     ]) {
         assert.strictEqual(paths.inScope(local, scope), false, local);
     }

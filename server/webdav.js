@@ -1,14 +1,7 @@
 /**
- * WebDAV 通信原语：URL 构建、请求、PROPFIND 解析、目录遍历、JSON 读写。
- * 上层模块不应直接使用 fetch。
- *
- * 加密就挂在这一层：config.cryptoKey 有值时，putBuffer 加密、getBuffer 解密，
- * 上层（backup.js / cloud.js）一行都不用改，连 index.json 与 lock.json 都顺带
- * 保护上了 —— 索引里列着全部本地路径，本身就值得加密。
- *
- * getBuffer 走「降级读」：只有带魔数的才解密，明文原样返回。这样用户手动传上
- * 网盘的东西不会因为开了加密就读不出来。keycheck.json 是唯一的例外，它必须以
- * 明文读写（要靠它才能拿到 salt），所以单独走 RawBuffer 那对函数。
+ * WebDAV 请求、URL 构建、目录遍历及文件读写。
+ * cryptoKey 存在时自动加密上传内容、解密下载内容；明文文件保持原样。
+ * keycheck.json 通过 RawBuffer 接口明文读写。
  */
 const encryption = require('./encryption.js');
 
@@ -74,7 +67,7 @@ async function webDavRequest(config, extraSegments, options, expectedStatuses) {
     return response;
 }
 
-/** 明文读写。只给 keycheck.json 用 —— 它是加密体系的引导文件，不能被加密。 */
+/** 以原始字节读写 keycheck.json。 */
 async function getRawBuffer(config, segments) {
     const response = await webDavRequest(config, segments, { method: 'GET' }, [200]);
     return Buffer.from(await response.arrayBuffer());
@@ -88,12 +81,7 @@ async function putRawBuffer(config, segments, body, contentType = 'application/o
     }, [200, 201, 204]);
 }
 
-/**
- * 下载并按需解密。
- *
- * 没配密钥却拿到密文时不硬解也不报错 —— 原样返回让上层去处理，
- * 报错文案由 index.js 的 keycheck 环节统一给出，那里才说得清是怎么回事。
- */
+/** 下载文件；配置了密钥时尝试解密，否则返回原始字节。 */
 async function getBuffer(config, segments) {
     const raw = await getRawBuffer(config, segments);
     if (!config.cryptoKey) return raw;
@@ -101,7 +89,7 @@ async function getBuffer(config, segments) {
 }
 
 async function putBuffer(config, segments, body, contentType = 'application/octet-stream') {
-    // 加密后就不再是原来的类型了，声称是 json 只会误导网盘的预览器
+    // 加密内容使用 application/octet-stream 类型。
     const payload = config.cryptoKey ? encryption.encrypt(body, config.cryptoKey) : body;
     const type = config.cryptoKey ? 'application/octet-stream' : contentType;
     await putRawBuffer(config, segments, payload, type);
@@ -111,23 +99,25 @@ async function remove(config, segments) {
     await webDavRequest(config, segments, { method: 'DELETE' }, [200, 202, 204, 404]);
 }
 
-/** 读 JSON。走 getBuffer 而不是直接 fetch，才能一并享受解密与降级读。 */
-async function readJson(config, segments, fallback) {
+/** 通过 getBuffer 读取并解析 JSON。 */
+async function readJson(config, segments) {
     try {
         const text = (await getBuffer(config, segments)).toString('utf8');
-        return text.trim() ? JSON.parse(text) : fallback;
-    } catch {
-        return fallback;
+        return JSON.parse(text);
+    } catch (error) {
+        if (error.status === 404) return null;
+        throw error;
     }
 }
 
 /** 明文读 JSON。同 getRawBuffer，只给 keycheck.json 用。 */
-async function readRawJson(config, segments, fallback) {
+async function readRawJson(config, segments) {
     try {
         const text = (await getRawBuffer(config, segments)).toString('utf8');
-        return text.trim() ? JSON.parse(text) : fallback;
-    } catch {
-        return fallback;
+        return JSON.parse(text);
+    } catch (error) {
+        if (error.status === 404) return null;
+        throw error;
     }
 }
 
@@ -150,15 +140,7 @@ async function writeJson(config, segments, value) {
     );
 }
 
-/**
- * MKCOL 回 405 有两种截然不同的含义，必须靠 PROPFIND 分辨：
- *   目录已存在        → 无害，RFC 4918 就是这么规定的（坚果云则直接回 201）
- *   该层根本不让创建  → 致命，但如果放过去，错误会一路拖到 PUT 才以
- *                       「Method Not Allowed」的面目出现，完全看不出真正的原因
- *
- * 后者在 NAS 上很常见：WebDAV 根目录往往是共享文件夹的只读列表，
- * 不能在它下面直接建东西（OPTIONS 的 Allow 头里没有 MKCOL / PUT 就是这个情况）。
- */
+/** MKCOL 返回 405 时使用 PROPFIND 验证目录是否已存在。 */
 async function assertCollectionExists(config, segments) {
     const shown = `/${segments.join('/')}`;
     let response;
@@ -171,9 +153,7 @@ async function assertCollectionExists(config, segments) {
         }, [207, 200]);
     } catch (error) {
         const error2 = new Error(
-            `远程路径 ${shown} 不存在，服务器又拒绝创建它（MKCOL 405）。`
-            + `WebDAV 根目录通常不允许直接新建文件夹，请把「远程路径」改成以一个已存在的`
-            + `共享文件夹开头，例如「共享名/${splitRemotePath(config.remotePath).at(-1) || 'backup'}」。`,
+            `无法创建目录「${shown}」（405）。请检查权限，或使用已有共享目录。`,
         );
         error2.status = 405;
         error2.cause = error;
@@ -196,10 +176,8 @@ async function ensureRoot(config) {
 }
 
 /**
- * 在 remotePath 下按需创建多级子目录。created 用于单次备份内去重。
- *
- * 405 交给 assertCollectionExists 分辨是"已存在"还是"不让建"。
- * 409 故意不在成功之列 —— 它表示父集合不存在，把它当成功只会让后续 PUT 莫名其妙地失败。
+ * 在 remotePath 下创建多级目录，并用 created 记录已创建路径。
+ * 405 交由 assertCollectionExists 验证；409 作为错误处理。
  */
 async function ensureDir(config, segments, created) {
     const base = splitRemotePath(config.remotePath);
@@ -217,7 +195,7 @@ async function ensureDir(config, segments, created) {
     }
 }
 
-// --- PROPFIND -------------------------------------------------------------
+// PROPFIND
 
 const PROPFIND_BODY = [
     '<?xml version="1.0" encoding="utf-8" ?>',
@@ -269,10 +247,7 @@ function parsePropfind(xml) {
     return items;
 }
 
-/**
- * 列出远端一级目录。
- * 坚果云等服务不支持 Depth: infinity，所以只用 Depth: 1 逐层递归。
- */
+/** 使用 Depth: 1 列出一级目录。 */
 async function listDir(config, segments) {
     let response;
     try {
@@ -291,7 +266,7 @@ async function listDir(config, segments) {
     const files = [];
     const dirs = [];
     for (const item of parsePropfind(xml)) {
-        // Depth:1 会把被请求的目录自身也返回，按路径深度跳过
+        // 跳过 PROPFIND 返回的当前目录。
         if (item.depth <= selfDepth) continue;
         if (item.isDir) dirs.push(item.name);
         else files.push(item);

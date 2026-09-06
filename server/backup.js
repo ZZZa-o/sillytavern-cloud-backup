@@ -1,12 +1,6 @@
 /**
- * 备份执行：本地扫描、远端索引、上传/下载计划与执行。
- *
- * 只有两个方向，没有"双向同步"：
- *   上传  本地 → 远端，内容相同的跳过，远端多余文件保留不动
- *   下载  远端 → 本地，同名直接覆盖
- *
- * 远端目录结构与角色名映射都在 paths.js；本文件只管"传哪些、往哪个方向传"。
- * 决策部分（buildPlan）是纯函数，不碰网络也不碰磁盘，单元测试直接 require 本文件。
+ * 备份执行：扫描本地文件，读取远端索引，生成并执行上传或下载计划。
+ * 上传跳过内容相同的文件并保留远端其他文件；下载覆盖本地同名文件。
  */
 const fs = require('node:fs');
 const path = require('node:path');
@@ -17,32 +11,15 @@ const encryption = require('./encryption.js');
 const paths = require('./paths.js');
 const builtin = require('./builtin.js');
 const synthetic = require('./synthetic.js');
+const { connectionKey } = require('./activity.js');
 
-// ---------------------------------------------------------------------------
 // 通用小工具
-// ---------------------------------------------------------------------------
 
 function sha256(buffer) {
     return crypto.createHash('sha256').update(buffer).digest('hex');
 }
 
-function timestampForFile(date = new Date()) {
-    const pad = value => String(value).padStart(2, '0');
-    return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}`
-        + `-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
-}
-
-/**
- * 目录项到底是文件还是目录。
- *
- * 不能光信 Dirent —— readdir 的 d_type 不是所有文件系统都给：
- * 安卓共享存储（/sdcard 那套 FUSE）、部分网络挂载都会返回 DT_UNKNOWN，
- * 这时 isDirectory() 与 isFile() **同时为假**，整个目录会被静默跳过；
- * 符号链接也一样两头不沾，而 Termux 上把数据目录链到别处是常规操作。
- *
- * 所以拿不准就补一次 stat（stat 会跟随符号链接）。d_type 正常的系统上
- * 前两行就返回了，一次多余的系统调用都不会发生。
- */
+/** 读取目录项类型；Dirent 无法确定类型或遇到符号链接时使用 stat。 */
 function entryKind(parent, dirent) {
     if (dirent.isDirectory()) return 'dir';
     if (dirent.isFile()) return 'file';
@@ -51,65 +28,50 @@ function entryKind(parent, dirent) {
         if (stats.isDirectory()) return 'dir';
         if (stats.isFile()) return 'file';
     } catch {
-        // 扫描期间被删了，或者是条断掉的符号链接
+        // 跳过已删除的文件或失效的符号链接。
     }
     return 'other';
 }
 
-// 元数据单独一层，遍历备份区时跳过
+// 备份遍历跳过元数据目录。
 const META_DIR = '.st-sync';
 const INDEX_NAME = 'index.json';
 const LOCK_NAME = 'lock.json';
 const KEYCHECK_NAME = 'keycheck.json';
 const NON_BACKUP_DIRS = [META_DIR];
 
-// ---------------------------------------------------------------------------
-// 加密准备
-//
-// 任何真正读写云端的操作之前都要先过这里。它做两件事：拿到能用的主密钥，
-// 以及在口令不对时把整个操作拦下来。
-//
-// 拦截这一步是整套加密里最要紧的：口令错了如果放过去，「从云端下载」会把一堆
-// 解不开的字节直接覆盖到角色卡目录上，本地数据当场就毁了。所以校验必须发生在
-// 任何磁盘写入之前，而且失败就是抛错，没有「尽力而为」这个选项。
-// ---------------------------------------------------------------------------
+// 云端读写前校验口令并准备主密钥，校验失败时中止操作。
 
-// scrypt 一次约 100ms。云端列表刷新得挺勤，每次都重跑没必要，
-// 按「口令指纹」缓存住 —— 键里带口令的哈希，改了口令自然就不命中了
+// 按口令指纹缓存派生密钥。
 const keyCache = new Map();
 
-function cacheKeyFor(config) {
-    const seed = `${config.url}|${config.remotePath}|${config.encryption.passphrase}`;
+function cacheKeyFor(config, keycheck) {
+    const seed = JSON.stringify([config.url, config.remotePath, config.encryption.passphrase, keycheck]);
     return crypto.createHash('sha256').update(seed).digest('hex');
 }
 
 async function readKeycheck(config) {
-    return webdav.readRawJson(config, [META_DIR, KEYCHECK_NAME], null);
+    return webdav.readRawJson(config, [META_DIR, KEYCHECK_NAME]);
 }
 
-/**
- * 返回一份挂好 cryptoKey 的 config 副本。未开启加密时 cryptoKey 为 null，
- * webdav.js 那边就走明文路径，行为与加这个功能之前完全一致。
- */
-async function prepareCrypto(config) {
+/** 准备加密密钥；read 模式只读取云端，write 模式可初始化目录和校验文件。 */
+async function prepareCrypto(config, access) {
     const enabled = !!config.encryption?.enabled;
-    await webdav.ensureRoot(config);
+    if (access === 'write') await webdav.ensureRoot(config);
     const existing = await readKeycheck(config);
 
     if (!enabled) {
-        // 云端是个加密仓库，本方案却没开加密。放过去的话，读到的全是密文，
-        // 「预览变更」会把每个文件都算成需要下载，然后把密文糊到本地
+        // 远端已加密而当前方案未启用加密时中止操作。
         if (existing) {
             throw new Error(
-                '这个云端目录里的文件是加密的，但当前方案没有开启加密。'
-                + '请在面板里勾选「加密上传的文件」并填入当初设置的口令。',
+                '云端目录已加密，请开启「加密上传的文件」并填写原口令。',
             );
         }
         return { ...config, cryptoKey: null };
     }
 
-    const cacheId = cacheKeyFor(config);
     if (existing) {
+        const cacheId = cacheKeyFor(config, existing);
         const cached = keyCache.get(cacheId);
         if (cached) return { ...config, cryptoKey: cached };
 
@@ -119,49 +81,40 @@ async function prepareCrypto(config) {
         return { ...config, cryptoKey: verdict.key };
     }
 
-    // 首次在这个云端目录启用加密：生成 salt 并把 keycheck 落上去。
-    // 必须先写成功再返回 —— 万一写失败就返回密钥，文件加密传上去了却没有
-    // 校验文件，换台设备就再也验不了口令
+    if (access === 'read') return { ...config, cryptoKey: null };
+
+    // 首次启用加密时生成 salt，写入 keycheck 成功后返回密钥。
     const created = encryption.createKeycheck(config.encryption.passphrase);
     await webdav.ensureDir(config, [META_DIR], new Set());
     await webdav.writeRawJson(config, [META_DIR, KEYCHECK_NAME], created.keycheck);
-    keyCache.set(cacheId, created.key);
+    keyCache.set(cacheKeyFor(config, created.keycheck), created.key);
     return { ...config, cryptoKey: created.key };
 }
 
-// ---------------------------------------------------------------------------
 // 本地扫描
-// ---------------------------------------------------------------------------
 
 /**
- * 扫描范围内的本地文件，产出 { 本地相对路径: {hash, size, mtime} }。
- * hashCache 传上次的扫描结果：大小与 mtime 都没变就复用旧哈希，
- * 避免每次备份都把所有聊天读一遍。
+ * 扫描范围内文件，返回 { 本地相对路径: { hash, size, mtime } }。
+ * 文件大小和 mtime 未变时复用 hashCache 中的哈希。
  */
 async function scanLocal(directories, scope, hashCache = {}, names = null) {
     const out = {};
     for (const root of paths.scanRoots(directories, scope)) {
         await walkLocal(root.dir, root.prefix, out, hashCache, scope, names);
     }
-    // 合成文件每次都从 settings.json / secrets.json 现拼一遍再算哈希：
-    // 源数据一改哈希就变，下次备份必然识别为需要更新。
-    // 不套 mtime 缓存是因为那样两头都不准 —— 酒馆频繁改写 settings.json，
-    // mtime 变了不代表人设变了；反过来也一样。反正只有几 KB，现算最可靠。
-    //
-    // 人设与 API 配置都是一项一份：勾了谁就只拼谁，云端也就只动那一份
+    // 按所选人设和 API 配置生成合成文件，每次重新计算内容哈希。
     const synth = [
         ...synthetic.listPersonaFiles(directories, scope.personas, names?.personas?.byAvatar || {}),
         ...synthetic.listApiProfileFiles(directories, scope.apiProfiles, names?.profiles?.byId || {}),
     ];
     for (const item of synth) {
-        const buffer = synthetic.build(item.localRel, directories, scope, names);
+        const buffer = synthetic.build(item.localRel, directories, names);
         out[item.localRel] = { hash: sha256(buffer), size: buffer.length, mtime: '' };
     }
     return out;
 }
 
-// names 必须传下去：头像的范围判定要靠它认出"这张脸本机有没有"，
-// 缺了的话本机已有的头像会全部走进 inScope 的兜底分支被误当成云端来的放行
+// 传递 names，用于判断头像是否属于本机已有人设。
 async function walkLocal(dir, prefix, out, hashCache, scope, names) {
     if (!fs.existsSync(dir)) return;
     const dirents = await fs.promises.readdir(dir, { withFileTypes: true });
@@ -200,9 +153,7 @@ function statMtime(absPath) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// 本机状态：只是哈希缓存 + 设备标识，丢了也不影响正确性
-// ---------------------------------------------------------------------------
+// 本机扫描缓存与设备标识。
 
 const STATE_DIR = '.sillytavern-cloud-backup';
 const STATE_FILE = 'scan-cache.json';
@@ -213,14 +164,10 @@ function stateFilePath(directories) {
 
 function readState(directories) {
     try {
-        const parsed = JSON.parse(fs.readFileSync(stateFilePath(directories), 'utf8'));
-        return {
-            device: typeof parsed.device === 'string' ? parsed.device : '',
-            cache: parsed.cache && typeof parsed.cache === 'object' ? parsed.cache : {},
-            lastBackupAt: typeof parsed.lastBackupAt === 'string' ? parsed.lastBackupAt : '',
-        };
-    } catch {
-        return { device: '', cache: {}, lastBackupAt: '' };
+        return JSON.parse(fs.readFileSync(stateFilePath(directories), 'utf8'));
+    } catch (error) {
+        if (error.code === 'ENOENT') return { device: '', cache: {}, lastBackupAt: '' };
+        throw error;
     }
 }
 
@@ -230,7 +177,7 @@ function writeState(directories, state) {
     fs.writeFileSync(file, JSON.stringify(state, null, 2), 'utf8');
 }
 
-/** 设备标识只用于并发锁的提示文案，自动生成即可。 */
+/** 生成并发锁提示使用的设备标识。 */
 function resolveDevice(directories) {
     const state = readState(directories);
     if (state.device) return state.device;
@@ -239,16 +186,13 @@ function resolveDevice(directories) {
     return state.device;
 }
 
-// ---------------------------------------------------------------------------
 // 计划（纯函数）
-// ---------------------------------------------------------------------------
 
 const PLAN_PREVIEW_LIMIT = 40;
 
 /**
- * 比对两端，产出待上传与待下载清单。两边哈希一致就算 unchanged。
- * 远端有文件但索引里没哈希（手动传的，或索引损坏）时无法判断内容，
- * 上传方向按"需要覆盖"处理，下载方向按"需要拉取"处理 —— 两边都不会静默跳过。
+ * 比较本地与远端哈希，生成上传和下载清单。
+ * 哈希一致时标记 unchanged；远端缺少哈希时列入对应方向的传输清单。
  */
 function buildPlan(context) {
     const { local, remoteIndex, remotePresent, scope, names } = context;
@@ -287,47 +231,37 @@ function buildPlan(context) {
     return plan;
 }
 
-/**
- * 云端还剩多少个文件是加密之前传上去的明文。
- *
- * 开启加密不会自动重传存量文件 —— 内容没变，哈希也就没变，比对时算作 unchanged，
- * 这是有意为之（一次性重传全部数据不该由一个复选框悄悄触发）。所以要把这个数字
- * 显式报给用户，让他知道云端还留着什么。
- *
- * 只数索引里明确记着 enc 为假的。没有 enc 字段的是本次改动之前的老索引，
- * 那时候压根没有加密，同样算明文
- */
+/** 统计索引中 enc 为假或缺失的云端明文文件。 */
 function countPlaintext(remoteIndex, cryptoKey) {
     if (!cryptoKey) return 0;
     return Object.values(remoteIndex).filter(entry => !entry?.enc).length;
 }
 
-/** 压成前端可直接渲染的结构，长列表截断以免响应过大。 */
-function summarizePlan(plan) {
-    const summary = { counts: { unchanged: plan.unchanged }, truncated: false };
+/** 生成前端报告结构，并截断过长的文件列表。 */
+function summarizePlan(plan, names) {
+    const summary = { counts: { unchanged: plan.unchanged }, uploadCategories: {}, truncated: false };
+    for (const item of plan.upload) {
+        const category = paths.categoryOf(item.path);
+        summary.uploadCategories[category] = (summary.uploadCategories[category] || 0) + 1;
+    }
     for (const action of ['upload', 'download']) {
         const items = plan[action];
         summary.counts[action] = items.length;
         summary[action] = items.slice(0, PLAN_PREVIEW_LIMIT)
-            .map(item => ({ path: item.path, reason: item.reason }));
+            .map(item => ({ path: item.path, label: paths.toRemote(item.path, names), reason: item.reason }));
         if (items.length > PLAN_PREVIEW_LIMIT) summary.truncated = true;
     }
     return summary;
 }
 
-// ---------------------------------------------------------------------------
 // 并发锁
-// ---------------------------------------------------------------------------
 
 const LOCK_TTL_MS = 5 * 60 * 1000;
 
-/**
- * 用锁文件而不是 WebDAV 的 LOCK 方法：坚果云等服务对 LOCK 支持不完整。
- * 必须先建出 .st-sync/ —— 首次备份时它还不存在，直接 PUT 锁文件会被服务端以 409 拒绝。
- */
+/** 创建 .st-sync/ 元数据目录并写入并发锁文件。 */
 async function acquireLock(config, device, createdDirs = new Set()) {
     await webdav.ensureDir(config, [META_DIR], createdDirs);
-    const existing = await webdav.readJson(config, [META_DIR, LOCK_NAME], null);
+    const existing = await webdav.readJson(config, [META_DIR, LOCK_NAME]);
     if (existing?.at && existing.device && existing.device !== device) {
         const age = Date.now() - new Date(existing.at).getTime();
         if (Number.isFinite(age) && age >= 0 && age < LOCK_TTL_MS) {
@@ -340,7 +274,7 @@ async function acquireLock(config, device, createdDirs = new Set()) {
 
 async function releaseLock(config, device) {
     try {
-        const existing = await webdav.readJson(config, [META_DIR, LOCK_NAME], null);
+        const existing = await webdav.readJson(config, [META_DIR, LOCK_NAME]);
         if (existing?.device && existing.device !== device) return;
         await webdav.remove(config, [META_DIR, LOCK_NAME]);
     } catch (error) {
@@ -348,17 +282,11 @@ async function releaseLock(config, device) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // 远端索引
-// ---------------------------------------------------------------------------
-
-function isPlainObject(value) {
-    return !!value && typeof value === 'object' && !Array.isArray(value);
-}
 
 async function readRemoteIndex(config) {
-    const raw = await webdav.readJson(config, [META_DIR, INDEX_NAME], null);
-    return isPlainObject(raw?.entries) ? raw.entries : {};
+    const raw = await webdav.readJson(config, [META_DIR, INDEX_NAME]);
+    return raw === null ? {} : raw.entries;
 }
 
 async function writeRemoteIndex(config, entries, device, createdDirs = new Set()) {
@@ -381,70 +309,119 @@ function remoteToLocalMap(remoteIndex, names) {
     return map;
 }
 
-// ---------------------------------------------------------------------------
 // 收集两端状态
-// ---------------------------------------------------------------------------
+
+const REMOTE_CHECK_MS = 5 * 60 * 1000;
+const changeStates = new Map();
+
+function changeState(directories, config) {
+    const key = `${directories.root}\0${connectionKey(config)}`;
+    if (!changeStates.has(key)) {
+        changeStates.set(key, { remote: null, cache: readState(directories).cache, revision: 0 });
+    }
+    return changeStates.get(key);
+}
+
+function rememberRemote(state, remote) {
+    state.remote = remote;
+    state.revision++;
+}
+
+function invalidateChanges(directories, config) {
+    rememberRemote(changeState(directories, config), null);
+}
+
+async function readRemoteSnapshot(config) {
+    const remoteIndex = await readRemoteIndex(config);
+    const remoteTree = {};
+    await webdav.walk(config, [], '', remoteTree, NON_BACKUP_DIRS);
+    return { remoteIndex, remoteTree, checkedAt: new Date().toISOString() };
+}
+
+function remotePresence(remote, names) {
+    const fromIndex = remoteToLocalMap(remote.remoteIndex, names);
+    const remotePresent = {};
+    for (const [remoteRel, meta] of Object.entries(remote.remoteTree)) {
+        const localRel = fromIndex[remoteRel] || paths.toLocal(remoteRel, names);
+        if (localRel) remotePresent[localRel] = meta;
+    }
+    return remotePresent;
+}
 
 async function collectContext(user, config, names) {
     const directories = user.directories;
     const device = resolveDevice(directories);
     const state = readState(directories);
-
-    await webdav.ensureRoot(config);
-
     const local = await scanLocal(directories, config.scope, state.cache, names);
-    const remoteIndex = await readRemoteIndex(config);
-
-    // 实际远端文件树，用来发现绕过本插件的手动增删
-    const remoteTree = {};
-    await webdav.walk(config, [], '', remoteTree, NON_BACKUP_DIRS);
-
-    const fromIndex = remoteToLocalMap(remoteIndex, names);
-    const remotePresent = {};
-    for (const [remoteRel, meta] of Object.entries(remoteTree)) {
-        const localRel = fromIndex[remoteRel] || paths.toLocal(remoteRel, names);
-        if (localRel) remotePresent[localRel] = meta;
-    }
-
-    return { directories, device, names, local, remoteIndex, remotePresent, scope: config.scope, cache: state.cache };
+    const remote = await readRemoteSnapshot(config);
+    const monitor = changeState(directories, config);
+    rememberRemote(monitor, remote);
+    monitor.cache = local;
+    return {
+        directories, device, names, local, ...remote,
+        remotePresent: remotePresence(remote, names), scope: config.scope, cache: state.cache,
+    };
 }
 
-// ---------------------------------------------------------------------------
+/** 扫描本地变更；云端索引和目录树每五分钟刷新。 */
+async function changesOnly(user, config, names) {
+    const state = changeState(user.directories, config);
+    let remote = state.remote;
+    if (remote === null || Date.now() - Date.parse(remote.checkedAt) >= REMOTE_CHECK_MS) {
+        const revision = state.revision;
+        remote = await readRemoteSnapshot(await prepareCrypto(config, 'read'));
+        if (revision === state.revision) rememberRemote(state, remote);
+    }
+    const local = await scanLocal(user.directories, config.scope, state.cache, names);
+    state.cache = local;
+    const plan = buildPlan({
+        local, remoteIndex: remote.remoteIndex, remotePresent: remotePresence(remote, names),
+        scope: config.scope, names,
+    });
+    return {
+        ...summarizePlan(plan, names),
+        checkedAt: new Date().toISOString(),
+        remoteCheckedAt: remote.checkedAt,
+        plaintextRemaining: countPlaintext(remote.remoteIndex, config.encryption.enabled),
+    };
+}
+
 // 执行
-// ---------------------------------------------------------------------------
 
 function newResult() {
     return {
         uploaded: 0,
+        uploadedFiles: [],
         downloaded: 0,
         skipped: 0,
+        plaintextRemaining: 0,
         errors: [],
-        // 下载动了哪几类，前端据此热刷新对应列表，免得让用户整页重载
+        // 记录下载涉及的类别，供前端刷新列表。
         touched: {
             characters: 0, chats: 0, worlds: 0, personas: 0,
             presets: 0, themes: 0, apiProfiles: 0, other: 0,
         },
-        // 动过的顶层目录名。热刷新的粒度有时细于类别 ——
-        // 比如「美化」里 backgrounds 要单独调一次背景列表接口，QuickReplies 则根本没有热加载入口。
+        // 记录下载涉及的顶层目录。
         touchedDirs: [],
-        // 人设热加载要用：合并后的 power_user 三件套，前端直接写进内存就能看到
+        // 保存合并后的人设字段，供前端刷新。
         personaData: null,
     };
 }
 
-/** 记一笔某个本地路径被写入了，供前端决定刷哪个列表。 */
+/** 记录已写入文件的类别与顶层目录。 */
 function noteTouched(result, localRel) {
     result.touched[paths.categoryOf(localRel)]++;
     const top = String(localRel).split('/')[0];
     if (top && !result.touchedDirs.includes(top)) result.touchedDirs.push(top);
 }
 
-/** 上传：范围内本地文件推到远端。云端多余的文件一概不动。 */
+/** 上传范围内的本地文件，保留云端其他文件。 */
 async function runUpload(user, config, names) {
     const context = await collectContext(user, config, names);
     const { directories, device } = context;
     const createdDirs = new Set();
     const remoteIndex = { ...context.remoteIndex };
+    const remoteTree = { ...context.remoteTree };
     const cache = { ...context.cache };
     const plan = buildPlan(context);
     const result = newResult();
@@ -460,9 +437,9 @@ async function runUpload(user, config, names) {
                 const remoteRel = paths.toRemote(item.path, names);
                 if (!remoteRel) continue;
 
-                // 合成文件现拼出来，磁盘上没有它对应的文件
+                // 读取合成文件内容。
                 const buffer = isSynthetic
-                    ? synthetic.build(item.path, directories, config.scope, names)
+                    ? synthetic.build(item.path, directories, names)
                     : await fs.promises.readFile(absPath);
                 const segments = remoteRel.split('/');
                 await webdav.ensureDir(config, segments.slice(0, -1), createdDirs);
@@ -475,22 +452,26 @@ async function runUpload(user, config, names) {
                     remote: remoteRel,
                     device,
                     at: new Date().toISOString(),
-                    // 记下这一份是明文还是密文、是哪把钥匙加的。用户中途开启加密时，
-                    // 靠它算出云端还剩多少明文文件（见 countPlaintext）
+                    // 记录文件加密状态与密钥指纹。
                     enc: !!config.cryptoKey,
                     keyId: config.cryptoKey ? encryption.keyIdOf(config.cryptoKey) : '',
                 };
-                // 合成文件没有稳定的 mtime 可比，不进哈希缓存
+                // 合成文件跳过 mtime 哈希缓存。
                 if (!isSynthetic) {
                     cache[item.path] = { hash, size: buffer.length, mtime: statMtime(absPath) };
                 }
                 result.uploaded++;
+                result.uploadedFiles.push({ path: item.path, label: remoteRel, bytes: buffer.length });
+                remoteTree[remoteRel] = { size: buffer.length, modified: remoteIndex[item.path].at };
             } catch (error) {
                 result.errors.push({ path: item.path, action: 'upload', error: error.message });
             }
         }
 
         await writeRemoteIndex(config, remoteIndex, device, createdDirs);
+        rememberRemote(changeState(directories, config), {
+            remoteIndex, remoteTree, checkedAt: new Date().toISOString(),
+        });
     } finally {
         await releaseLock(config, device);
     }
@@ -514,7 +495,7 @@ async function runDownload(user, config, names) {
             if (!remoteRel) throw new Error('无法定位云端路径');
             const buffer = await webdav.getBuffer(config, remoteRel.split('/'));
             const absPath = await applyDownloaded(directories, item.path, buffer, result);
-            // 合成文件没有稳定的 mtime 可比，不进哈希缓存
+            // 合成文件跳过 mtime 哈希缓存。
             if (!synthetic.isSynthetic(item.path)) {
                 cache[item.path] = { hash: sha256(buffer), size: buffer.length, mtime: statMtime(absPath) };
             }
@@ -528,17 +509,14 @@ async function runDownload(user, config, names) {
 }
 
 /**
- * 把下载到的一个文件落地，并记一笔它属于哪一类。
- * 合成文件走各自的合并（只改 settings.json 里那几个字段），其余直接写盘。
- * 「从云端下载」与「云端文件 → 下载选中」两条路都走这里，行为必须一致。
+ * 写入下载内容并记录类别。
+ * 合成文件按条目合并，普通文件直接写盘；两种下载入口共用此函数。
  */
 async function applyDownloaded(directories, localRel, buffer, result) {
     let absPath;
     if (synthetic.isSynthetic(localRel)) {
         const merged = synthetic.merge(localRel, directories, buffer);
-        // 人设能热加载，把合并后的结果带回前端，省得让用户刷新页面
-        // 人设合并后的三件套带回前端热加载。一次下载多个人设时后一次覆盖前一次，
-        // 每次拿到的都是合并后的全量，取最后一份即可
+        // 保留最后一次合并的完整人设数据，供前端刷新。
         if (paths.categoryOf(localRel) === 'personas') result.personaData = merged.data;
         absPath = merged.absPath;
     } else {
@@ -548,7 +526,7 @@ async function applyDownloaded(directories, localRel, buffer, result) {
     return absPath;
 }
 
-/** 写本地文件，同名直接覆盖 —— 酒馆本来就允许存在同名角色卡，不需要另存副本。 */
+/** 写入本地文件，同名直接覆盖。 */
 async function writeLocal(directories, localRel, buffer) {
     const absPath = paths.localAbsPath(directories, localRel);
     if (!absPath) throw new Error(`无法解析本地路径：${localRel}`);
@@ -569,24 +547,22 @@ function finish(directories, device, cache, result, direction) {
     return result;
 }
 
-/** 只比对不执行。顺带报一下云端还剩多少明文，让用户在真正上传前就看得到。 */
+/** 生成变更预览和云端明文文件计数。 */
 async function planOnly(user, config, names) {
     const context = await collectContext(user, config, names);
     return {
-        ...summarizePlan(buildPlan(context)),
+        ...summarizePlan(buildPlan(context), names),
+        checkedAt: new Date().toISOString(),
+        remoteCheckedAt: context.checkedAt,
         plaintextRemaining: countPlaintext(context.remoteIndex, config.cryptoKey),
     };
 }
 
-// ---------------------------------------------------------------------------
-// 聊天清单：范围弹窗里每张角色卡是一个文件夹，展开就能勾具体某一条聊天
-// ---------------------------------------------------------------------------
+// 角色聊天清单。
 
 /**
- * 每个角色目录下有几条聊天、多大。键是角色目录名（角色卡文件名去扩展名）。
- *
- * 只 readdir 不读文件内容，几百个角色也就是几百次目录读取。
- * 明细不在这里给 —— 角色多起来一次性回传能到几百 KB，改由 chatEntries 按需拿。
+ * 统计各角色的聊天数量与大小，键为角色卡文件名去扩展名。
+ * 单条聊天明细由 chatEntries 按需读取。
  */
 function chatCounts(directories) {
     const out = {};
@@ -612,13 +588,10 @@ function chatCounts(directories) {
     return out;
 }
 
-/**
- * 某个角色的聊天文件明细。value 是 `<角色目录名>/<聊天文件>`，
- * 与范围里 scope.chats.selected 存的形式一致，前端拿到就能直接比对勾选态。
- */
+/** 返回角色聊天文件明细；value 为 <角色目录名>/<聊天文件>，对应 scope.chats.selected。 */
 function chatEntries(directories, stem) {
     const clean = String(stem || '').trim();
-    // 目录名来自角色卡文件名，正常不含分隔符；挡一下手工构造的请求
+    // 校验角色目录名为单个路径段。
     if (!clean || clean.includes('/') || clean.includes('\\') || clean.includes('..')) return [];
 
     const dir = path.join(directories.chats || '', clean);
@@ -629,13 +602,11 @@ function chatEntries(directories, stem) {
             bytes: item.bytes,
             modified: statMtime(path.join(dir, item.rel)),
         }))
-        // 新的排在前面 —— 跨设备接续聊天时找的永远是最近那条
+        // 按修改时间倒序排列聊天。
         .sort((a, b) => (Date.parse(b.modified) || 0) - (Date.parse(a.modified) || 0));
 }
 
-// ---------------------------------------------------------------------------
-// 目录清单：范围弹窗要按目录列出具体文件，好让用户勾到单个预设、单个主题
-// ---------------------------------------------------------------------------
+// 预设与美化目录清单。
 
 /** 递归列出目录下的文件，返回 { rel, bytes }；rel 是目录内的 POSIX 相对路径。 */
 function listDirFiles(dir) {
@@ -660,7 +631,7 @@ function listDirFiles(dir) {
                 try {
                     out.push({ rel, bytes: fs.statSync(full).size });
                 } catch {
-                    // 扫描期间文件被删掉了，跳过就好
+                    // 跳过扫描期间已删除的文件。
                 }
             }
         }
@@ -670,17 +641,14 @@ function listDirFiles(dir) {
     return out;
 }
 
-/** 主题与预设都是 json，列表里带着扩展名只是噪音。背景图不出明细，不受影响。 */
+/** 显示文件名时去掉 .json 扩展名。 */
 function prettyName(rel) {
     return rel.replace(/\.json$/i, '');
 }
 
 /**
- * 预设与美化两组各自的目录清单。
- *
- * detail 为真的目录带上 entries（具体文件），弹窗展开就能逐个勾；
- * 背景图只给总数与体积，且**已扣掉酒馆自带的那些** —— excluded 是扣掉的张数，
- * 界面上要交代清楚，否则用户会以为插件把他的图弄丢了。
+ * 生成预设与美化目录清单。
+ * detail 为真时附带 entries；背景图仅统计数量和大小，excluded 记录排除的自带图片数量。
  */
 function scopeDirStats(directories) {
     const of = group => paths.rootsOfGroup(group).map(root => {
@@ -713,7 +681,6 @@ module.exports = {
     KEYCHECK_NAME,
     NON_BACKUP_DIRS,
     sha256,
-    timestampForFile,
     newResult,
     noteTouched,
     readState,
@@ -724,6 +691,8 @@ module.exports = {
     collectContext,
     prepareCrypto,
     planOnly,
+    changesOnly,
+    invalidateChanges,
     scopeDirStats,
     chatCounts,
     chatEntries,

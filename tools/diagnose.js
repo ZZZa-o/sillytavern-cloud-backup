@@ -1,21 +1,14 @@
 /**
- * 现场诊断：在装着酒馆的那台机器上跑，打印插件到底看到了什么。
- *
- *   cd ~/SillyTavern && node plugins/sillytavern-cloud-backup/tools/diagnose.js
- *
- * 专治「面板显示后端已连接，但聊天记录/用户人设/API 配置一片空白」。
- * 手机（Termux）与电脑上的表现不一样时，把两边的输出贴出来一比就知道差在哪。
- *
- * 只读，不改任何文件。密码与密钥一律打码，输出可以直接贴给别人看。
+ * 只读诊断：检查插件安装、聊天、人设、API 配置及加密状态。
+ * 运行：node plugins/sillytavern-cloud-backup/tools/diagnose.js
+ * 输出中的密码与密钥已打码。
  */
 const fs = require('node:fs');
 const path = require('node:path');
 
-// ---------------------------------------------------------------------------
 // 定位酒馆
-// ---------------------------------------------------------------------------
 
-/** 从本文件往上找，或者用当前目录 —— 装在 plugins/ 下时上溯三层就是酒馆根目录。 */
+/** 在当前目录及插件上级目录查找酒馆。 */
 function findTavernRoot() {
     const guesses = [
         process.argv[2],
@@ -58,19 +51,13 @@ function mask(value) {
     return `${text.slice(0, 2)}***${text.slice(-2)}（长度 ${text.length}）`;
 }
 
-/**
- * 加密状态。口令只报长度不报内容 —— 诊断输出是会被贴到 issue 里的东西。
- *
- * 「开了但没口令」要特别点出来：后端会直接拒绝连接（resolveConfig 里拦着），
- * 而用户看到的只是一句连不上，未必想得到是这个原因。
- */
+/** 显示加密状态及口令长度，标记缺少口令的方案。 */
 function describeEncryption(encryption) {
     if (!encryption?.enabled) return '未开启';
     if (!encryption.passphrase) return '已开启，但没有口令【连接会被拒绝】';
     return `已开启，口令 ${mask(encryption.passphrase)}`;
 }
 
-// ---------------------------------------------------------------------------
 
 const ST_ROOT = findTavernRoot();
 if (!ST_ROOT) {
@@ -84,7 +71,7 @@ console.log('酒馆根目录 :', ST_ROOT);
 console.log('Node       :', process.version);
 console.log('平台       :', process.platform, process.arch);
 
-// ---- 插件装在哪、什么版本 ----
+// 插件装在哪、什么版本
 
 line('插件安装状态');
 const serverDir = path.join(ST_ROOT, 'plugins', 'sillytavern-cloud-backup');
@@ -101,11 +88,11 @@ for (const [label, dir, versionFile] of [
     let version = '(读不到版本)';
     try {
         version = JSON.parse(fs.readFileSync(path.join(dir, versionFile), 'utf8')).version || version;
-    } catch { /* 版本读不到不影响别的判断 */ }
+    } catch { /* 忽略版本读取失败。 */ }
     console.log(`${label}: v${version}  ${dir}`);
 }
 
-// 新版才有的文件与接口。缺了就说明装的是旧版，或者只更新了一半
+// 检查所需模块和接口是否存在。
 const NEW_MARKERS = [
     ['server/synthetic.js', '用户人设 / API 配置'],
     ['server/backup.js', '备份主体'],
@@ -114,7 +101,7 @@ for (const [rel, what] of NEW_MARKERS) {
     const file = path.join(serverDir, rel);
     console.log(`  ${rel.padEnd(22)} ${fs.existsSync(file) ? '有' : '【缺失】'}  (${what})`);
 }
-// 直接在源码里找新版才有的路由与函数名，比看版本号可靠
+// 通过路由与函数名检查接口。
 const indexSrc = (() => {
     try { return fs.readFileSync(path.join(serverDir, 'server', 'index.js'), 'utf8'); } catch { return ''; }
 })();
@@ -122,7 +109,7 @@ for (const marker of ['chats/list', 'listPersonas', 'listApiProfiles', 'chatCoun
     console.log(`  /status 提供 ${marker.padEnd(16)} ${indexSrc.includes(marker) ? '是' : '【否 —— 装的是旧版服务端】'}`);
 }
 
-// ---- 用户目录 ----
+// 用户目录
 
 line('用户目录');
 const dataRoot = path.join(ST_ROOT, 'data');
@@ -157,9 +144,7 @@ for (const key of ['root', 'characters', 'chats', 'themes', 'openAI_Settings']) 
     console.log(`  ${key.padEnd(16)} ${note}  ${dir}`);
 }
 
-// ---- readdir 的 d_type 靠不靠得住 ----
-// 安卓共享存储（FUSE）不返回 d_type，Dirent 的 isDirectory()/isFile() 会双双为假，
-// 用它做判断的代码会把整个目录静默跳过。这是手机与电脑表现不同的头号嫌疑。
+// 检查 readdir 返回的目录项类型。
 
 line('readdir 类型判定（安卓共享存储的经典坑）');
 function checkDirType(dir, label) {
@@ -180,7 +165,7 @@ checkDirType(directories.chats, 'chats');
 checkDirType(directories.characters, 'characters');
 checkDirType(directories.themes, 'themes');
 
-// ---- 聊天记录 ----
+// 聊天记录
 
 line('聊天记录');
 function statKind(parent, name) {
@@ -209,7 +194,7 @@ try {
 console.log(`按 stat 判定：${chatDirs.length} 个角色目录，合计 ${chatTotal} 个聊天文件`);
 console.log('前 5 个     :', JSON.stringify(chatDirs.slice(0, 5)));
 
-// 角色卡文件名去扩展名，必须与聊天目录名对得上，否则界面上就是"无聊天记录"
+// 使用角色卡文件名去扩展名匹配聊天目录。
 line('角色卡 ↔ 聊天目录 名字对照');
 let avatars = [];
 try {
@@ -225,7 +210,7 @@ if (avatars.length && !matched.length && chatDirs.length) {
     console.log('  ← 【角色卡名与聊天目录名完全对不上，界面必然显示"无聊天记录"】');
 }
 
-// ---- settings.json 里的人设与 API 配置 ----
+// settings.json 里的人设与 API 配置
 
 line('settings.json');
 const settingsFile = path.join(directories.root, 'settings.json');
@@ -256,7 +241,7 @@ if (!fs.existsSync(settingsFile)) {
     }
 }
 
-// ---- 插件自己的配置 ----
+// 插件自己的配置
 
 line('插件配置 config.json');
 const configFile = path.join(directories.root, '.sillytavern-cloud-backup', 'config.json');
@@ -266,7 +251,7 @@ if (!fs.existsSync(configFile)) {
     try {
         const config = JSON.parse(fs.readFileSync(configFile, 'utf8'));
 
-        // 连接信息按方案分组存。老配置还摊在顶层，当成一条无名方案照样列出来
+        // 按方案显示连接信息，旧顶层配置按单个方案处理。
         const profiles = Array.isArray(config.profiles) && config.profiles.length
             ? config.profiles
             : [{ id: '(旧格式)', name: '(顶层)', ...config }];
@@ -300,7 +285,7 @@ if (!fs.existsSync(configFile)) {
     }
 }
 
-// ---- 直接调插件自己的函数 ----
+// 直接调插件自己的函数
 
 line('直接调用插件的服务端函数');
 try {
