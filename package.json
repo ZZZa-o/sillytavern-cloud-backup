@@ -10,6 +10,6 @@
         "url": "https://github.com/ZZZa-o/sillytavern-cloud-backup.git"
     },
     "scripts": {
-        "test": "node tools/backup-logic-test.js && node tools/synthetic-test.js && node tools/card-book-test.js && node tools/config-profile-test.js && node tools/encryption-test.js && node tools/flush-guard-test.mjs && node --test tools/backup-monitor-test.js && node --experimental-vm-modules --test tools/backup-ui-test.mjs"
+        "test": "node tools/backup-logic-test.js && node tools/synthetic-test.js && node tools/card-book-test.js && node tools/config-profile-test.js && node tools/encryption-test.js && node tools/flush-guard-test.mjs && node --test tools/backup-monitor-test.js && node --experimental-vm-modules --test tools/backup-ui-test.mjs tools/cloud-ui-test.mjs"
     }
 }

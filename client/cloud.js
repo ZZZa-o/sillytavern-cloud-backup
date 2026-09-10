@@ -7,14 +7,22 @@ import { reloadTouched } from './reload.js';
 import { currentCharacterName } from './tavern.js';
 import {
     escHtml, prettyBytes, prettyDate,
-    setCloudStatus, notify, withBusy,
+    setCloudStatus, notify, withBusy, isBusy,
 } from './panel.js';
 
 // 分组顺序：备份类别在前，元数据与其他文件在后。
 const GROUP_ORDER = [
     '角色卡', '聊天记录', '世界书', '用户人设', 'API 配置',
-    '预设', '美化', '设置', '其他', '插件元数据',
+    '预设', 'QR', '美化', '背景图片', '设置', '其他', '插件元数据',
 ];
+
+// 只拆分浏览分组，保留已有网盘路径和下载映射。
+const DIRECTORY_GROUPS = new Map([
+    ['预设/OpenAI Settings', '预设'],
+    ['预设/QuickReplies', 'QR'],
+    ['美化/themes', '美化'],
+    ['美化/backgrounds', '背景图片'],
+]);
 
 const GROUP_CHARACTERS = '角色卡';
 const GROUP_CHATS = '聊天记录';
@@ -39,7 +47,14 @@ function keyword() {
 function visibleItems() {
     const word = keyword();
     if (!word) return items;
-    return items.filter(item => `${item.remote} ${item.local} ${item.label || ''}`.toLowerCase().includes(word));
+    return items.filter(item => `${item.remote} ${item.local} ${item.label || ''} ${item.group}`.toLowerCase().includes(word));
+}
+
+function displayItem(item) {
+    const parts = item.remote.split('/');
+    const group = DIRECTORY_GROUPS.get(parts.slice(0, 2).join('/'));
+    if (!group || parts.length < 3) return item;
+    return { ...item, group, displayPath: parts.slice(2).join('/') };
 }
 
 function groupOf(name) {
@@ -109,11 +124,13 @@ export function filterByCurrentCharacter() {
 
 export function renderCloud() {
     const list = $('#stcb-cloud-list');
+    const scrollTop = list.scrollTop();
     const visible = visibleItems();
 
     if (!items.length) {
         list.html('<div class="stcb-cloud-empty">暂无云端文件，点击「刷新」加载。</div>');
         $('#stcb-cloud-meta').text('');
+        updateSelectionControls(visible);
         return;
     }
     if (!visible.length) {
@@ -135,7 +152,7 @@ export function renderCloud() {
             const rows = sortEntries(shownEntries).map(item => {
                 const checked = selected.has(item.remote) ? ' checked' : '';
                 // 显示分组内的相对路径。
-                const shown = item.remote.split('/').slice(1).join('/') || item.remote;
+                const shown = item.displayPath || item.remote.split('/').slice(1).join('/') || item.remote;
                 // 将人设及头像显示为一行。
                 if (item.folded) {
                     return `<label class="stcb-cloud-item">`
@@ -149,7 +166,7 @@ export function renderCloud() {
                 const trail = item.label ? `${shown} · ` : '';
                 return `<label class="stcb-cloud-item">`
                     + `<input type="checkbox" value="${escHtml(item.remote)}"${checked}>`
-                    + `<span class="stcb-cloud-name" title="${escHtml(shown)}">${escHtml(title)}</span>`
+                    + `<span class="stcb-cloud-name" title="${escHtml(item.remote)}">${escHtml(title)}</span>`
                     + `<small>${escHtml(trail)}${escHtml(prettyBytes(item.size))} · ${escHtml(prettyDate(item.modified))}</small>`
                     + `</label>`;
             }).join('');
@@ -159,10 +176,10 @@ export function renderCloud() {
             // 角色卡分组标题右端挂联动开关：勾一张卡要不要连聊天一起带上
             const link = name === GROUP_CHARACTERS
                 ? `<button type="button" class="stcb-cloud-link${linkChats ? ' is-on' : ''}"`
-                    + ` data-act="link" title="${linkChats
+                    + ` data-act="link" aria-label="联动选择聊天记录" aria-pressed="${linkChats}"${isBusy() ? ' disabled' : ''} title="${linkChats
                         ? '联动已开启：同时选择角色卡和聊天'
                         : '联动已关闭：仅选择角色卡'}">`
-                    + `<i class="fa-solid ${linkChats ? 'fa-link' : 'fa-link-slash'}"></i></button>`
+                    + `<i class="fa-solid ${linkChats ? 'fa-link' : 'fa-link-slash'}" aria-hidden="true"></i></button>`
                 : '';
             return `<details class="stcb-cloud-group" data-group="${escHtml(name)}"${open}>`
                 + `<summary>`
@@ -172,8 +189,31 @@ export function renderCloud() {
         })
         .join('');
 
-    list.html(html);
+    // 重绘勾选和联动状态时，保持正在浏览的位置。
+    list.html(html).scrollTop(scrollTop);
     renderMeta();
+}
+
+function updateSelectionControls(visible) {
+    const counts = new Map();
+    for (const item of visible) {
+        if (!counts.has(item.group)) counts.set(item.group, { total: 0, checked: 0 });
+        const count = counts.get(item.group);
+        count.total++;
+        if (selected.has(item.remote)) count.checked++;
+    }
+    $('#stcb-cloud-list .stcb-cloud-group-check').each(function () {
+        const count = counts.get(this.dataset.group);
+        this.checked = !!count && count.checked === count.total;
+        this.indeterminate = !!count && count.checked > 0 && count.checked < count.total;
+    });
+    const controls = [
+        ['#stcb-cloud-select-all', !visible.length || visible.every(item => selected.has(item.remote))],
+        ['#stcb-cloud-clear-selection', selected.size === 0],
+    ];
+    for (const [selector, disabled] of controls) {
+        $(selector).attr('data-stcb-disabled', String(disabled)).prop('disabled', disabled || isBusy());
+    }
 }
 
 function renderMeta() {
@@ -184,6 +224,7 @@ function renderMeta() {
     if (selected.size) parts.push(`已选 ${selected.size} 个`);
     parts.push(sortMode === 'time' ? '按修改时间排序' : '按路径排序');
     $('#stcb-cloud-meta').text(parts.join('，'));
+    updateSelectionControls(visible);
 }
 
 /** 记录分组展开状态并在重绘时恢复。 */
@@ -275,10 +316,22 @@ export function toggleGroup(group, checked) {
     renderCloud();
 }
 
+/** 全选当前筛选结果，包括收起分组内的文件，并沿用角色聊天与人设联动。 */
+export function selectVisible() {
+    for (const item of visibleItems()) applyToggle(item.remote, true);
+    renderCloud();
+}
+
+/** 清空所有勾选，包括被搜索条件隐藏的文件。 */
+export function clearSelection() {
+    selected.clear();
+    renderCloud();
+}
+
 export async function refreshCloud(showBusy = true) {
     const load = async () => {
         const data = await apiWithNames('cloud/list');
-        items = data.items;
+        items = data.items.map(displayItem);
         // 刷新后收起全部分组。
         expanded.clear();
         // 从选择集中移除云端已删除的文件。

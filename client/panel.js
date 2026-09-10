@@ -41,6 +41,8 @@ export function isBusy() {
 export function setBusy(value) {
     busy = value;
     $('#stcb-root button').prop('disabled', value);
+    // 操作结束后，保留选择按钮因空列表或无勾选而禁用的状态。
+    if (!value) $('#stcb-root button[data-stcb-disabled="true"]').prop('disabled', true);
 }
 
 function writeStatus(selector, message, type) {
@@ -116,6 +118,12 @@ function checkbox(id, label, isChecked) {
 export function button(id, icon, label, variant = '') {
     return `<button type="button" id="${id}" class="menu_button${variant ? ` ${variant}` : ''}">`
         + `<i class="fa-solid ${icon}"></i><span>${escHtml(label)}</span></button>`;
+}
+
+function cloudIconButton(id, icon, label) {
+    return `<button type="button" id="${id}" class="menu_button stcb-cloud-icon"`
+        + ` title="${attr(label)}" aria-label="${attr(label)}" data-stcb-disabled="true" disabled>`
+        + `<i class="fa-solid ${icon}" aria-hidden="true"></i></button>`;
 }
 
 function numberField(id, label, value, { min, max, step }, suffix) {
@@ -209,7 +217,11 @@ export function buildPanel() {
                 button('stcb-cloud-current', 'fa-user', '当前'),
             ),
         ),
-        '<input type="search" id="stcb-cloud-search" class="text_pole stcb-cloud-search" placeholder="搜索云端文件…">',
+        row('stcb-cloud-filter',
+            '<input type="search" id="stcb-cloud-search" class="text_pole stcb-cloud-search" placeholder="搜索云端文件…" aria-label="搜索云端文件">',
+            cloudIconButton('stcb-cloud-select-all', 'fa-list-check', '全选当前筛选结果'),
+            cloudIconButton('stcb-cloud-clear-selection', 'fa-square-minus', '取消全部选择'),
+        ),
         '<div id="stcb-cloud-list" class="stcb-cloud-list"></div>',
         '<div id="stcb-cloud-meta" class="stcb-meta"></div>',
         // 在云端文件区域底部显示操作结果。

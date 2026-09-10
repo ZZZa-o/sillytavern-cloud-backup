@@ -418,9 +418,23 @@
 
 /* 云端文件管理 */
 
-.stcb-cloud-search {
+.stcb-cloud-filter {
     flex: 1 1 100%;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 3px;
+    min-width: 0;
     margin-top: 2px;
+}
+
+.stcb-cloud-filter .stcb-cloud-search {
+    margin: 0;
+}
+
+.stcb-shell .menu_button.stcb-cloud-icon {
+    width: 26px !important;
+    margin: 0;
 }
 
 .stcb-cloud-list {
@@ -429,6 +443,7 @@
     max-height: 260px;
     margin-top: 3px;
     overflow-y: auto;
+    isolation: isolate;
 }
 
 .stcb-cloud-empty {
@@ -445,6 +460,9 @@
 }
 
 .stcb-cloud-group > summary {
+    position: sticky;
+    top: 0;
+    z-index: 1;
     display: flex;
     align-items: center;
     gap: 5px;
@@ -452,6 +470,9 @@
     cursor: pointer;
     font-size: 11.5px;
     color: var(--stcb-muted);
+    background: var(--SmartThemeBlurTintColor);
+    /* 去除主题底色的透明度，吸顶时遮住下方滚动的文件。 */
+    background: rgb(from var(--SmartThemeBlurTintColor) r g b);
 }
 
 .stcb-cloud-group[open] > summary {
@@ -490,6 +511,7 @@
 /* 用图标和颜色标记角色卡与聊天的联动状态。 */
 .stcb-cloud-link {
     flex: 0 0 auto;
+    margin-left: auto;
     display: inline-flex;
     align-items: center;
     justify-content: center;

@@ -13,6 +13,7 @@ import {
 } from './backup.js';
 import {
     refreshCloud, downloadSelected, deleteSelected, renderCloud,
+    selectVisible, clearSelection,
     toggleItem, toggleGroup, noteToggle, toggleSort, toggleLink, filterByCurrentCharacter,
 } from './cloud.js';
 import { ensureRecentSortOption } from './reload.js';
@@ -158,6 +159,8 @@ function bindEvents() {
     on('stcb-cloud-refresh', () => refreshCloud(true));
     on('stcb-cloud-download', async () => { await downloadSelected(); queueChanges(0); });
     on('stcb-cloud-delete', async () => { await deleteSelected(); queueChanges(0); });
+    on('stcb-cloud-select-all', selectVisible);
+    on('stcb-cloud-clear-selection', clearSelection);
     on('stcb-cloud-sort', function () {
         const mode = toggleSort();
         $(this).find('span').text(mode === 'time' ? '按时间' : '按路径');
