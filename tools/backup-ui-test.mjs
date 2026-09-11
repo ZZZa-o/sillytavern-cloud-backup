@@ -29,6 +29,7 @@ async function harness() {
     const calls = [];
     const ui = new Map();
     const handlers = new Map();
+    const reloadResult = { message: '', needsReload: false };
     const config = {
         activeProfileId: 'one', url: 'https://fixture.example/dav/', username: '', remotePath: 'backup',
         scope: { worlds: { all: true, selected: [] } },
@@ -95,7 +96,7 @@ async function harness() {
             DEFAULT_INTERVAL_MINUTES: 360, MIN_INTERVAL_MINUTES: 15, MAX_INTERVAL_MINUTES: 10080,
         },
         './cloud.js': { refreshCloud: async () => {} },
-        './reload.js': { reloadTouched: async () => '' },
+        './reload.js': { reloadTouched: async () => ({ ...reloadResult }) },
     };
     const modules = new Map();
     for (const [name, exports] of Object.entries(dependencies)) {
@@ -127,7 +128,7 @@ async function harness() {
         await drain();
     }
     return {
-        fn: module.namespace, panel: panel.namespace, config, responses, handlers, calls, ui, document,
+        fn: module.namespace, panel: panel.namespace, config, responses, handlers, calls, ui, document, reloadResult,
         advance, element, uploaded,
         count: action => calls.filter(call => call.action === action).length,
         now: () => now,
@@ -193,7 +194,9 @@ test('手动比对结果只写入备份模块', async () => {
     h.panel.setStatus('配置已保存。');
     h.panel.setAutoStatus('上次自动上传完成。');
     await h.fn.previewBackup();
-    assert.match(h.ui.get('#stcb-backup-status').text, /比对完成/);
+    assert.equal(h.ui.get('#stcb-backup-status').text, '');
+    assert.match(h.ui.get('#stcb-preview-report').html, /可上传 1 个文件/);
+    assert.match(h.ui.get('#stcb-preview-report').html, /可下载 1 个文件/);
     assert.equal(h.ui.get('#stcb-status').text, '配置已保存。');
     assert.equal(h.ui.get('#stcb-auto-status').text, '上次自动上传完成。');
 });
@@ -206,7 +209,8 @@ test('自动上传在自动模块列出文件，保留手动预览结果', async
     h.panel.setReport('手动上传记录');
     await h.fn.autoMaybeRun('auto');
     assert.equal(h.calls.find(call => call.action === 'backup/upload').body.trigger, 'auto');
-    assert.match(h.ui.get('#stcb-auto-status').text, /已上传 1 个文件/);
+    assert.equal(h.ui.get('#stcb-auto-status').text, '');
+    assert.match(h.ui.get('#stcb-auto-report').html, /已上传 1 个/);
     assert.match(h.ui.get('#stcb-auto-report').html, /世界书\/测试世界书.json/);
     assert.equal(h.ui.get('#stcb-backup-status').text, '比对完成。');
     assert.equal(h.ui.get('#stcb-report').html, '手动上传记录');
@@ -268,7 +272,7 @@ test('手动预览完成后，较早的后台响应不会覆盖它', async () =>
     await pending;
     assert.match(h.ui.get('#stcb-preview-report').html, /手动检查/);
     assert.doesNotMatch(h.ui.get('#stcb-preview-report').html, /较早检查/);
-    assert.match(h.ui.get('#stcb-backup-status').text, /比对完成/);
+    assert.equal(h.ui.get('#stcb-backup-status').text, '');
 });
 
 test('检查失败显示错误并保留上次结果', async () => {
@@ -308,8 +312,9 @@ test('自动上传全部失败时显示失败文件', async () => {
         return result;
     });
     await h.fn.autoMaybeRun('auto');
-    assert.match(h.ui.get('#stcb-auto-status').text, /已上传 0 个文件，失败 1 个/);
-    assert.doesNotMatch(h.ui.get('#stcb-auto-status').text, /没有待上传文件/);
+    assert.equal(h.ui.get('#stcb-auto-status').text, '');
+    assert.match(h.ui.get('#stcb-auto-report').html, /已上传 0 个，失败 1 个/);
+    assert.doesNotMatch(h.ui.get('#stcb-auto-report').html, /没有待上传文件/);
     assert.match(h.ui.get('#stcb-auto-report').html, /worlds\/book.json/);
     assert.match(h.ui.get('#stcb-auto-report').html, /fixture file failed/);
 });
@@ -330,4 +335,71 @@ test('文件名和错误文本按文字显示', async () => {
     assert.match(html, /&lt;img/);
     assert.match(html, /&lt;script&gt;/);
     assert.doesNotMatch(html, /<img|<script|<b>failed/);
+});
+
+test('方案成功提示会消失，不会清除之后的错误', async () => {
+    const h = await harness();
+    h.panel.setStatus('方案已改名。', 'ok', 3000);
+    await h.advance(2999);
+    assert.equal(h.ui.get('#stcb-status').text, '方案已改名。');
+    h.panel.setStatus('连接失败。', 'error');
+    await h.advance(1);
+    assert.equal(h.ui.get('#stcb-status').text, '连接失败。');
+    assert.equal(h.ui.get('#stcb-status').classes.has('is-error'), true);
+    h.panel.setStatus('方案已切换。', 'ok', 3000);
+    await h.advance(3000);
+    assert.equal(h.ui.get('#stcb-status').text, '');
+});
+
+test('未加密提醒只显示最新结果，重新检查和切换方案都会更新它', async () => {
+    const h = await harness();
+    h.responses['backup/changes'].plan.plaintextRemaining = 3;
+    await h.init();
+    assert.match(h.ui.get('#stcb-plaintext-notice').html, /<b>3<\/b>/);
+    assert.doesNotMatch(h.ui.get('#stcb-preview-report').html, /未加密文件/);
+    h.handlers.set('backup/upload', () => ({ ...h.uploaded(), plaintextRemaining: 1 }));
+    await h.fn.runUpload('manual');
+    assert.match(h.ui.get('#stcb-plaintext-notice').html, /<b>1<\/b>/);
+    assert.doesNotMatch(h.ui.get('#stcb-report').html, /未加密文件/);
+    h.responses['backup/changes'].plan.plaintextRemaining = 0;
+    await h.advance(0);
+    assert.equal(h.ui.get('#stcb-plaintext-notice').html, '');
+    h.responses['backup/changes'].plan.plaintextRemaining = 2;
+    await h.fn.checkChanges();
+    assert.match(h.ui.get('#stcb-plaintext-notice').html, /<b>2<\/b>/);
+    h.config.activeProfileId = 'two';
+    h.config.url = '';
+    await h.fn.resetBackupMonitor();
+    assert.equal(h.ui.get('#stcb-plaintext-notice').html, '');
+});
+
+test('下载结果合并刷新说明，仅需手动刷新时标记警告', async () => {
+    const h = await harness();
+    await h.init();
+    h.handlers.set('backup/download', () => ({
+        ...h.uploaded(), uploaded: 0, downloaded: 1, uploadedFiles: [],
+    }));
+    h.reloadResult.message = '世界书列表已刷新。';
+    await h.fn.runDownload();
+    assert.match(h.ui.get('#stcb-backup-status').text, /下载 1 个文件.*世界书列表已刷新/);
+    assert.equal(h.ui.get('#stcb-backup-status').classes.has('is-ok'), true);
+    h.reloadResult.message += '请刷新页面加载快速回复。';
+    h.reloadResult.needsReload = true;
+    await h.fn.runDownload();
+    assert.match(h.ui.get('#stcb-backup-status').text, /请刷新页面加载快速回复/);
+    assert.equal(h.ui.get('#stcb-backup-status').classes.has('is-warn'), true);
+});
+
+test('手动上传全部失败时仍显示失败详情，不宣称云端已是最新', async () => {
+    const h = await harness();
+    await h.init();
+    h.handlers.set('backup/upload', () => ({
+        ...h.uploaded(), uploaded: 0, uploadedFiles: [],
+        errors: [{ path: 'worlds/book.json', error: 'fixture file failed' }],
+    }));
+    await h.fn.runUpload('manual');
+    assert.match(h.ui.get('#stcb-backup-status').text, /上传 0 个文件.*失败 1 个/);
+    assert.doesNotMatch(h.ui.get('#stcb-backup-status').text, /云端已是最新/);
+    assert.equal(h.ui.get('#stcb-backup-status').classes.has('is-warn'), true);
+    assert.match(h.ui.get('#stcb-report').html, /worlds\/book.json.*fixture file failed/);
 });

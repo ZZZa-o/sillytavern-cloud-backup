@@ -9,8 +9,6 @@ import { loadOpenAISettings } from '/scripts/openai.js';
 import { getBackgrounds } from '/scripts/backgrounds.js';
 import { getUserAvatars, setPersonaDescription, user_avatar } from '/scripts/personas.js';
 
-import { notify } from './panel.js';
-
 // 让刚下载的角色卡排在列表最前面
 
 const SORT_FIELD = 'date_added';
@@ -94,7 +92,7 @@ function dedupeOptions(selector, selectedValue) {
 
 /**
  * 按下载结果中的 touched、touchedDirs 和 personaData 刷新对应列表。
- * 返回刷新结果提示；无需提示时返回空串。
+ * 返回刷新结果及是否需要刷新页面，由下载操作统一显示反馈。
  */
 export async function reloadTouched(result) {
     const { touched, touchedDirs: dirs } = result;
@@ -155,16 +153,16 @@ export async function reloadTouched(result) {
         }
     }
 
-    if (refreshed.length) {
-        notify('success', `${refreshed.join('、')}已刷新`);
-    }
-
     // 聊天列表由酒馆的「管理聊天文件」读取。
 
     if (touched.apiProfiles > 0) stale.push('API 配置');
     if (dirs.includes('QuickReplies')) stale.push('快速回复');
 
-    return stale.length ? `请刷新页面加载${stale.join('、')}。` : '';
+    return {
+        message: (refreshed.length ? `${refreshed.join('、')}已刷新。` : '')
+            + (stale.length ? `请刷新页面加载${stale.join('、')}。` : ''),
+        needsReload: stale.length > 0,
+    };
 }
 
 /**

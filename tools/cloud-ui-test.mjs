@@ -29,6 +29,7 @@ async function harness(initial = fixture) {
     const ui = new Map();
     const calls = [];
     const handlers = new Map();
+    const reloadResult = { message: '', needsReload: false };
     let files = structuredClone(initial);
     let groups = [];
     const buttonIds = ['#stcb-cloud-select-all', '#stcb-cloud-clear-selection', '#stcb-cloud-refresh'];
@@ -69,7 +70,7 @@ async function harness(initial = fixture) {
     const context = vm.createContext({ $: element, window: {}, confirm: () => true, console });
     const dependencies = {
         './api.js': { apiWithNames: api },
-        './reload.js': { reloadTouched: async () => '' },
+        './reload.js': { reloadTouched: async () => ({ ...reloadResult }) },
         './tavern.js': { currentCharacterName: () => '阿岚' },
         './settings.js': {
             getConfig: () => ({}), describeScope: () => '', setActiveFields() {},
@@ -90,7 +91,7 @@ async function harness(initial = fixture) {
     await cloud.link(name => modules.get(name));
     await cloud.evaluate();
     return {
-        fn: cloud.namespace, panel: panel.namespace, ui, calls, handlers, element,
+        fn: cloud.namespace, panel: panel.namespace, ui, calls, handlers, element, reloadResult,
         group: name => groups.find(group => group.dataset.group === name),
         replaceFiles: value => { files = structuredClone(value); },
         async search(word) { element('#stcb-cloud-search').val(word); cloud.namespace.renderCloud(); },
@@ -224,4 +225,20 @@ test('刷新后剔除已消失文件，仍保留存活文件的勾选', async ()
     h.replaceFiles(fixture.filter(item => item.group === '美化'));
     await h.fn.refreshCloud();
     assert.deepEqual(await h.paths(), ['美化/backgrounds/书房.jpg', '美化/themes/深色.json']);
+});
+
+test('云端下载合并刷新说明，部分失败及手动刷新提示都会保留', async () => {
+    const h = await harness();
+    await h.fn.refreshCloud();
+    h.fn.selectVisible();
+    h.reloadResult.message = '角色列表已刷新。请刷新页面加载快速回复。';
+    h.reloadResult.needsReload = true;
+    h.handlers.set('cloud/download', () => ({
+        downloaded: 1, errors: [{ path: '预设/QuickReplies/指令.json', error: 'fixture failed' }],
+    }));
+    await h.fn.downloadSelected();
+    assert.match(h.ui.get('#stcb-cloud-status').text, /下载完成：1 个（失败 1 个）/);
+    assert.match(h.ui.get('#stcb-cloud-status').text, /角色列表已刷新。请刷新页面加载快速回复/);
+    await h.fn.refreshCloud(false);
+    assert.match(h.ui.get('#stcb-cloud-status').text, /失败 1 个/);
 });

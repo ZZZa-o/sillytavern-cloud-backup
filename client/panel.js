@@ -32,6 +32,7 @@ export function prettyBytes(size) {
 }
 
 let busy = false;
+let statusTimer = null;
 
 export function isBusy() {
     return busy;
@@ -51,8 +52,16 @@ function writeStatus(selector, message, type) {
     if (text) status.addClass(`is-${type}`);
 }
 
-export function setStatus(message, type = 'info') {
+export function setStatus(message, type = 'info', clearAfterMs = 0) {
+    clearTimeout(statusTimer);
+    statusTimer = null;
     writeStatus('#stcb-status', message, type);
+    if (message && clearAfterMs > 0) {
+        statusTimer = setTimeout(() => {
+            statusTimer = null;
+            writeStatus('#stcb-status', '', type);
+        }, clearAfterMs);
+    }
 }
 
 export function setBackupStatus(message, type = 'info') {
@@ -70,12 +79,6 @@ export function setCheckStatus(message, type = 'info') {
 /** 更新云端文件区域的状态行。 */
 export function setCloudStatus(message, type = 'info') {
     writeStatus('#stcb-cloud-status', message, type);
-}
-
-export function notify(type, message) {
-    if (typeof window.toastr?.[type] === 'function') {
-        window.toastr[type](message);
-    }
 }
 
 export function setReport(html) {
@@ -202,6 +205,7 @@ export function buildPanel() {
         '<div id="stcb-preview-report" class="stcb-report" aria-live="polite"></div>',
         '<div id="stcb-check-status" class="stcb-status stcb-check-status"></div>',
         '<div id="stcb-report" class="stcb-report"></div>',
+        '<div id="stcb-plaintext-notice" class="stcb-meta stcb-encrypt-warn"></div>',
     );
 
     const cloud = section('云端文件',
@@ -251,7 +255,6 @@ export function buildPanel() {
                 <div class="inline-drawer-content">
                     ${row('stcb-statusline',
                         '<span id="stcb-helper-status" class="stcb-pill is-muted">检查中</span>',
-                        `<span id="stcb-password-state" class="stcb-pill ${c.hasPassword ? 'is-ok' : 'is-muted'}">${c.hasPassword ? '密码已保存' : '未保存密码'}</span>`,
                         `<span id="stcb-encrypt-state" class="stcb-pill is-muted">未加密</span>`,
                         '<span id="stcb-last-backup" class="stcb-pill is-muted">尚未备份</span>',
                     )}
@@ -275,7 +278,7 @@ export function fillForm() {
     $('#stcb-url').val(c.url);
     $('#stcb-username').val(c.username);
     $('#stcb-remote-path').val(c.remotePath);
-    $('#stcb-password').val('').attr('placeholder', c.hasPassword ? '已保存，留空则不修改' : '填入后点保存配置');
+    $('#stcb-password').val('');
     $('#stcb-auto-enabled').prop('checked', c.auto.enabled);
     $('#stcb-auto-events').prop('checked', c.auto.onChatEvents);
     $('#stcb-auto-minutes').val(c.auto.intervalMinutes);
@@ -313,10 +316,7 @@ export function renderProfileSelect() {
 }
 
 export function renderPasswordState(saved) {
-    $('#stcb-password-state')
-        .toggleClass('is-ok', !!saved)
-        .toggleClass('is-muted', !saved)
-        .text(saved ? '密码已保存' : '未保存密码');
+    $('#stcb-password').attr('placeholder', saved ? '已保存，留空则不修改' : '填入后点保存配置');
 }
 
 export function renderScopeText() {

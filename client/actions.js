@@ -5,7 +5,7 @@ import {
     addProfile, renameProfile, removeProfile, setActiveProfile, activeProfile,
 } from './settings.js';
 import {
-    setStatus, notify, withBusy,
+    setStatus, withBusy,
     fillForm, renderPasswordState, renderEncryptState, renderScopeText, renderLastBackup, readFormIntoConfig,
 } from './panel.js';
 import { openScopePopup } from './scope.js';
@@ -90,7 +90,6 @@ export async function saveConfig() {
         fillForm();
         await resetBackupMonitor();
         setStatus('配置已保存。', 'ok');
-        notify('success', 'WebDAV 配置已保存');
     });
 }
 
@@ -105,7 +104,7 @@ export async function switchProfile(id) {
         await pushConfig();
         fillForm();
         await resetBackupMonitor();
-        setStatus(`已切换到方案「${activeProfile().name}」。`, 'ok');
+        setStatus(`已切换到方案「${activeProfile().name}」。`, 'ok', 3000);
         await refreshCloud(false);
     });
 }
@@ -136,7 +135,7 @@ export async function renameActiveProfile() {
     await withBusy('正在重命名...', async () => {
         await pushConfig();
         fillForm();
-        setStatus(`方案已改名为「${activeProfile().name}」。`, 'ok');
+        setStatus(`方案已改名为「${activeProfile().name}」。`, 'ok', 3000);
     });
 }
 
@@ -156,7 +155,7 @@ export async function deleteActiveProfile() {
         await pushConfig();
         fillForm();
         await resetBackupMonitor();
-        setStatus(`方案已删除，当前为「${activeProfile().name}」。`, 'ok');
+        setStatus(`方案已删除，当前为「${activeProfile().name}」。`, 'ok', 3000);
         await refreshCloud(false);
     });
 }
@@ -165,7 +164,6 @@ export async function testConnection() {
     await withBusy('正在测试连接...', async () => {
         const data = await api('test');
         setStatus(data.message, 'ok');
-        notify('success', 'WebDAV 连接测试通过');
         await refreshCloud(false);
     });
 }

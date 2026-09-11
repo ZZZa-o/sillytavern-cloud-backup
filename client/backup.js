@@ -2,7 +2,7 @@
 import { api, apiWithNames } from './api.js';
 import { getConfig, describeScope, setActiveFields } from './settings.js';
 import {
-    escHtml, prettyDate, prettyBytes, setReport, notify, withBusy, isBusy,
+    escHtml, prettyDate, prettyBytes, setReport, withBusy, isBusy,
     setBackupStatus, setAutoStatus, setCheckStatus, renderLastBackup,
 } from './panel.js';
 import { reloadTouched } from './reload.js';
@@ -49,10 +49,11 @@ function errorLines(errors) {
     return errors.map(item => `${escHtml(item.path)}<br><small>${escHtml(item.error)}</small>`);
 }
 
-function plaintextNotice(count) {
-    if (!count) return '';
-    return `<div class="stcb-meta stcb-encrypt-warn">云端还有 <b>${count}</b> 个未加密文件。`
-        + '确认本机副本完整后，删除对应云端文件并重新上传。</div>';
+function renderPlaintextNotice(count) {
+    $('#stcb-plaintext-notice').html(count
+        ? `云端还有 <b>${escHtml(count)}</b> 个未加密文件。`
+            + '确认本机副本完整后，删除对应云端文件并重新上传。'
+        : '');
 }
 
 function renderPreview(data) {
@@ -71,13 +72,13 @@ function renderPreview(data) {
         if (counts.download) blocks.push(group(`可下载 ${counts.download} 个文件`, lines(plan.download)));
         $('#stcb-preview-report').html(
             `<div class="stcb-change-summary${counts.upload ? ' has-changes' : ''}">${escHtml(summary)}</div>`
-            + `<div class="stcb-meta">范围：${escHtml(scopeText)} · 相同 ${counts.unchanged} 个文件</div>`
+            + `<div class="stcb-meta">相同 ${counts.unchanged} 个文件</div>`
             + (blocks.length ? '<div class="stcb-meta">上传以本机为准，下载以云端为准。</div>' : '')
             + blocks.join('')
-            + (plan.truncated ? '<div class="stcb-meta">每个清单显示前 40 项。</div>' : '')
-            + plaintextNotice(plan.plaintextRemaining),
+            + (plan.truncated ? '<div class="stcb-meta">每个清单显示前 40 项。</div>' : ''),
         );
     }
+    renderPlaintextNotice(plan.plaintextRemaining);
     setCheckStatus(`已检查：${prettyDate(plan.checkedAt)}`, 'ok');
 }
 
@@ -94,9 +95,12 @@ function renderAutoActivity(activity) {
     }
     if (activity.lastRun !== null) {
         const run = activity.lastRun;
+        const inHistory = activity.runs.some(item => item.at === run.at
+            && item.uploaded === run.uploaded && item.failed === run.failed);
         const text = run.uploaded || run.failed ? `已上传 ${run.uploaded} 个文件` : '没有待上传文件';
         const failed = run.failed ? `，失败 ${run.failed} 个` : '';
-        setAutoStatus(`${prettyDate(run.at)} · ${text}${failed}。`, run.failed ? 'warn' : 'ok');
+        setAutoStatus(inHistory && (run.uploaded || run.failed)
+            ? '' : `${prettyDate(run.at)} · ${text}${failed}。`, run.failed ? 'warn' : 'ok');
     } else {
         setAutoStatus(getConfig().auto.enabled ? '等待自动上传。' : '');
     }
@@ -109,6 +113,7 @@ export async function resetBackupMonitor() {
     previewKey = '';
     historyKey = '';
     setReport('');
+    renderPlaintextNotice(0);
     setBackupStatus('');
     $('#stcb-preview-report').empty();
     $('#stcb-auto-report').empty();
@@ -165,20 +170,15 @@ export async function previewBackup() {
         renderPreview(data);
         const { upload, download } = data.plan.counts;
         setBackupStatus(upload || download
-            ? `比对完成：可上传 ${upload} 项，可下载 ${download} 项。`
+            ? ''
             : '比对完成：两端已一致。', 'ok');
     }, setBackupStatus);
 }
 
-function renderResult(data, title) {
-    const counts = [['上传', data.uploaded], ['下载', data.downloaded], ['跳过相同', data.skipped]]
-        .filter(([, value]) => value > 0)
-        .map(([label, value]) => `<span class="stcb-pill is-muted">${label} ${value}</span>`).join('');
-    setReport(`<div class="stcb-meta">${escHtml(title)}</div>`
-        + `<div class="stcb-statusline">${counts}</div>`
-        + (data.uploadedFiles.length ? group('已上传文件', fileLines(data.uploadedFiles), true) : '')
-        + (data.errors.length ? group(`失败 ${data.errors.length} 项`, errorLines(data.errors), true) : '')
-        + plaintextNotice(data.plaintextRemaining));
+function renderResult(data) {
+    setReport((data.uploadedFiles.length ? group('已上传文件', fileLines(data.uploadedFiles), true) : '')
+        + (data.errors.length ? group('失败文件', errorLines(data.errors), true) : ''));
+    renderPlaintextNotice(data.plaintextRemaining);
 }
 
 export async function runUpload(reason) {
@@ -198,12 +198,12 @@ export async function runUpload(reason) {
         lastAutoAt = Date.parse(data.lastBackupAt);
         if (automatic) {
             renderAutoActivity(data.activity);
+            renderPlaintextNotice(data.plaintextRemaining);
         } else {
-            renderResult(data, '上传完成');
-            const summary = data.uploaded ? `上传 ${data.uploaded} 个文件` : '云端已是最新';
+            renderResult(data);
+            const summary = data.uploaded || data.errors.length ? `上传 ${data.uploaded} 个文件` : '云端已是最新';
             status(`${summary}，跳过相同 ${data.skipped} 个${data.errors.length ? `，失败 ${data.errors.length} 个` : ''}。`,
                 data.errors.length ? 'warn' : 'ok');
-            notify(data.errors.length ? 'warning' : 'success', summary);
             await refreshCloud(false);
         }
         queueChanges(0);
@@ -224,12 +224,11 @@ export async function runDownload() {
         if (key !== contextKey()) return;
         setActiveFields({ lastBackupAt: data.lastBackupAt });
         renderLastBackup(data.lastBackupAt);
-        renderResult(data, '下载完成');
-        const needsReload = await reloadTouched(data);
-        const summary = data.downloaded ? `下载 ${data.downloaded} 个文件` : '本机已是最新';
-        setBackupStatus(`${summary}，跳过相同 ${data.skipped} 个${data.errors.length ? `，失败 ${data.errors.length} 个` : ''}。${needsReload}`,
-            data.errors.length || needsReload ? 'warn' : 'ok');
-        notify(data.errors.length ? 'warning' : 'success', summary);
+        renderResult(data);
+        const reload = await reloadTouched(data);
+        const summary = data.downloaded || data.errors.length ? `下载 ${data.downloaded} 个文件` : '本机已是最新';
+        setBackupStatus(`${summary}，跳过相同 ${data.skipped} 个${data.errors.length ? `，失败 ${data.errors.length} 个` : ''}。${reload.message}`,
+            data.errors.length || reload.needsReload ? 'warn' : 'ok');
         queueChanges(0);
         return data;
     }, setBackupStatus);

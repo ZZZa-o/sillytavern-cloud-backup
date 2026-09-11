@@ -287,7 +287,7 @@ export async function openScopePopup() {
                     const failed = chatErrors.get(stem);
                     rows = failed
                         ? `<div class="stcb-scope-empty is-warn">读取聊天列表失败：${escHtml(failed)}</div>`
-                        : '<div class="stcb-scope-empty">这个角色还没有聊天记录。</div>';
+                        : '';
                 } else {
                     rows = chats.map(chat => `<label class="stcb-scope-folder-item">`
                         + `<input type="checkbox" data-role="chat" value="${escHtml(chat.value)}"`
@@ -303,7 +303,7 @@ export async function openScopePopup() {
                 + `<i class="fa-solid ${open ? 'fa-chevron-down' : 'fa-chevron-right'} stcb-scope-folder-caret"></i>`
                 + `<span>${escHtml(item.label)}</span>${tag}`
                 + `<small>${escHtml(note)}</small></div>`
-                + (open ? `<div class="stcb-scope-folder-rows">${rows}</div>` : '')
+                + (open && rows ? `<div class="stcb-scope-folder-rows">${rows}</div>` : '')
                 + `</div>`;
         }).join('');
 
@@ -436,7 +436,7 @@ export async function openScopePopup() {
                         + `<span>${escHtml(item.label)}</span>`
                         + `<small>${escHtml(prettyBytes(item.bytes))}</small></label>`;
                 }).join('')
-                : '<div class="stcb-scope-empty">这个目录还没有文件。</div>';
+                : '';
 
             const chosen = selection.all ? entries.length : selection.selected.length;
             blocks.push(`<div class="stcb-scope-folder${open ? ' is-open' : ''}" data-dir="${escHtml(dir.key)}">`
@@ -445,7 +445,7 @@ export async function openScopePopup() {
                 + `<i class="fa-solid ${open ? 'fa-chevron-down' : 'fa-chevron-right'} stcb-scope-folder-caret"></i>`
                 + `<span>${escHtml(dir.label)} · ${escHtml(size)}</span>`
                 + `<small>已选 ${chosen}</small></div>`
-                + (open ? `<div class="stcb-scope-folder-rows">${rows}</div>` : '')
+                + (open && rows ? `<div class="stcb-scope-folder-rows">${rows}</div>` : '')
                 + `</div>`);
         }
 

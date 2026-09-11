@@ -7,7 +7,7 @@ import { reloadTouched } from './reload.js';
 import { currentCharacterName } from './tavern.js';
 import {
     escHtml, prettyBytes, prettyDate,
-    setCloudStatus, notify, withBusy, isBusy,
+    setCloudStatus, withBusy, isBusy,
 } from './panel.js';
 
 // 分组顺序：备份类别在前，元数据与其他文件在后。
@@ -119,7 +119,7 @@ export function filterByCurrentCharacter() {
     }
     $('#stcb-cloud-search').val(name);
     renderCloud();
-    setCloudStatus(`已筛选「${name}」的文件。`, 'ok');
+    setCloudStatus('');
 }
 
 export function renderCloud() {
@@ -158,7 +158,7 @@ export function renderCloud() {
                     return `<label class="stcb-cloud-item">`
                         + `<input type="checkbox" value="${escHtml(item.remote)}"${checked}>`
                         + `<span class="stcb-cloud-name" title="${escHtml(item.folder)}">${escHtml(item.label)}</span>`
-                        + `<small>整个人设 · ${escHtml(prettyBytes(item.size))} · ${escHtml(prettyDate(item.modified))}</small>`
+                        + `<small>${escHtml(prettyBytes(item.size))} · ${escHtml(prettyDate(item.modified))}</small>`
                         + `</label>`;
                 }
                 // 优先显示后端提供的人设名，附带真实文件名。
@@ -170,6 +170,8 @@ export function renderCloud() {
                     + `<small>${escHtml(trail)}${escHtml(prettyBytes(item.size))} · ${escHtml(prettyDate(item.modified))}</small>`
                     + `</label>`;
             }).join('');
+            const note = shownEntries.some(item => item.folded)
+                ? '<div class="stcb-meta">每个人设连同头像一起选择。</div>' : '';
             const allChecked = entries.every(item => selected.has(item.remote));
             // 搜索时展开匹配分组。
             const open = keyword() || expanded.has(name) ? ' open' : '';
@@ -185,7 +187,7 @@ export function renderCloud() {
                 + `<summary>`
                 + `<input type="checkbox" class="stcb-cloud-group-check" data-group="${escHtml(name)}"${allChecked ? ' checked' : ''}>`
                 + `<span>${escHtml(name)} · ${shownEntries.length}</span>${link}</summary>`
-                + `<div class="stcb-cloud-rows">${rows}</div></details>`;
+                + `<div class="stcb-cloud-rows">${note}${rows}</div></details>`;
         })
         .join('');
 
@@ -222,7 +224,6 @@ function renderMeta() {
     const parts = [`共 ${items.length} 个文件`];
     if (word) parts.push(`筛选出 ${visible.length} 个`);
     if (selected.size) parts.push(`已选 ${selected.size} 个`);
-    parts.push(sortMode === 'time' ? '按修改时间排序' : '按路径排序');
     $('#stcb-cloud-meta').text(parts.join('，'));
     updateSelectionControls(visible);
 }
@@ -340,7 +341,6 @@ export async function refreshCloud(showBusy = true) {
             if (!alive.has(remote)) selected.delete(remote);
         }
         renderCloud();
-        return items.length;
     };
 
     if (!showBusy) {
@@ -353,7 +353,8 @@ export async function refreshCloud(showBusy = true) {
     }
 
     await withBusy('正在读取云端文件...', async () => {
-        setCloudStatus(`云端共 ${await load()} 个文件。`, 'ok');
+        await load();
+        setCloudStatus('');
     }, setCloudStatus);
 }
 
@@ -371,13 +372,12 @@ export async function downloadSelected() {
 
     await withBusy('正在下载云端文件...', async () => {
         const data = await apiWithNames('cloud/download', { paths });
-        const needsReload = await reloadTouched(data);
+        const reload = await reloadTouched(data);
 
         const extra = [];
         if (data.errors?.length) extra.push(`失败 ${data.errors.length} 个`);
-        setCloudStatus(`下载完成：${data.downloaded} 个${extra.length ? `（${extra.join('，')}）` : ''}。${needsReload}`,
-            data.errors?.length || needsReload ? 'warn' : 'ok');
-        notify('success', `已下载 ${data.downloaded} 个云端文件`);
+        setCloudStatus(`下载完成：${data.downloaded} 个${extra.length ? `（${extra.join('，')}）` : ''}。${reload.message}`,
+            data.errors?.length || reload.needsReload ? 'warn' : 'ok');
     }, setCloudStatus);
 }
 
@@ -397,7 +397,6 @@ export async function deleteSelected() {
         const data = await apiWithNames('cloud/delete', { paths });
         setCloudStatus(`已删除 ${data.deleted} 个云端文件${data.errors?.length ? `，${data.errors.length} 个失败` : ''}。`,
             data.errors?.length ? 'warn' : 'ok');
-        notify('info', `已删除 ${data.deleted} 个云端文件`);
         selected.clear();
         await refreshCloud(false);
     }, setCloudStatus);
