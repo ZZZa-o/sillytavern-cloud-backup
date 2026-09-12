@@ -275,6 +275,14 @@
     border-color: color-mix(in srgb, var(--stcb-danger) 55%, var(--stcb-border));
 }
 
+#stcb-cloud-overwrite {
+    opacity: 0.5;
+}
+
+#stcb-cloud-overwrite[aria-pressed="true"] {
+    opacity: 1;
+}
+
 .stcb-meta {
     flex: 1 1 100%;
     display: none;
@@ -786,7 +794,7 @@
         gap: 4px;
     }
 
-    /* 窄屏工具条拆为三按钮和两按钮两行，第一组与标题同行。 */
+    /* 窄屏工具条拆为两组三按钮，第一组与标题同行。 */
     .stcb-cloud-toolbar {
         display: contents;
     }
@@ -800,7 +808,7 @@
         margin-left: auto;
     }
 
-    /* 排序和当前角色按钮独占第二行并靠右。 */
+    /* 覆盖、排序和当前角色按钮独占第二行并靠右。 */
     .stcb-cloud-toolbar .stcb-actions:last-child {
         flex: 1 1 100%;
         justify-content: flex-end;

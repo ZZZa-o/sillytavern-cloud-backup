@@ -6,6 +6,7 @@ const webdav = require('./webdav.js');
 const backup = require('./backup.js');
 const paths = require('./paths.js');
 const synthetic = require('./synthetic.js');
+const { createCopyPlan } = require('./download-copies.js');
 
 /** 远端顶层目录 → 前端分组标题。认不出来的归到"其他"。 */
 const GROUPS = {
@@ -73,13 +74,14 @@ function sanitizeRemotePath(input) {
 }
 
 /** 下载选中文件并写回酒馆对应目录。 */
-async function download(user, config, names, remotePaths) {
+async function download(user, config, names, remotePaths, { overwrite = true } = {}) {
     const directories = user.directories;
     const remoteIndex = await backup.readRemoteIndex(config);
     const fromIndex = backup.remoteToLocalMap(remoteIndex, names);
 
     const result = {
         downloaded: 0,
+        overwrite,
         errors: [],
         written: [],
         // 记录下载涉及的类别与顶层目录。
@@ -92,18 +94,35 @@ async function download(user, config, names, remotePaths) {
         touchedDirs: [],
     };
 
+    const entries = [];
+    const seen = new Set();
     for (const raw of remotePaths) {
         let remoteRel = '';
         try {
             remoteRel = sanitizeRemotePath(raw);
             const localRel = fromIndex[remoteRel] || paths.toLocal(remoteRel, names);
             if (!localRel) throw new Error('该文件无法导入酒馆。');
-            const buffer = await webdav.getBuffer(config, remoteRel.split('/'));
-            await backup.applyDownloaded(directories, localRel, buffer, result);
-            result.written.push({ remote: remoteRel, target: localRel });
-            result.downloaded++;
+            if (!seen.has(remoteRel)) entries.push({ remote: remoteRel, local: localRel, target: localRel });
+            seen.add(remoteRel);
         } catch (error) {
             result.errors.push({ path: remoteRel || String(raw), action: 'download', error: error.message });
+        }
+    }
+
+    const copies = overwrite ? null : createCopyPlan(directories, entries);
+    for (const entry of copies?.entries || entries) {
+        try {
+            if (entry.error) throw new Error(entry.error);
+            let buffer = await webdav.getBuffer(config, entry.remote.split('/'));
+            // 合成条目的查重与同步合并之间不让出执行权，避免并发导入重用名称。
+            if (copies) buffer = copies.prepare(entry, buffer);
+            await backup.applyDownloaded(directories, entry.target, buffer, result, { overwrite });
+            entry.complete = true;
+            result.written.push({ remote: entry.remote, target: entry.target });
+            result.downloaded++;
+        } catch (error) {
+            entry.error = error.message;
+            result.errors.push({ path: entry.remote, action: 'download', error: error.message });
         }
     }
 

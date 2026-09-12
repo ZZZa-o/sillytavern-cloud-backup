@@ -28,11 +28,12 @@ const fixture = [
 async function harness(initial = fixture) {
     const ui = new Map();
     const calls = [];
+    const confirmations = [];
     const handlers = new Map();
     const reloadResult = { message: '', needsReload: false };
     let files = structuredClone(initial);
     let groups = [];
-    const buttonIds = ['#stcb-cloud-select-all', '#stcb-cloud-clear-selection', '#stcb-cloud-refresh'];
+    const buttonIds = ['#stcb-cloud-select-all', '#stcb-cloud-clear-selection', '#stcb-cloud-refresh', '#stcb-cloud-overwrite'];
     function state(selector) {
         if (!ui.has(selector)) ui.set(selector, { text: '', html: '', value: '', scrollTop: 0, attrs: {}, props: {} });
         return ui.get(selector);
@@ -67,7 +68,7 @@ async function harness(initial = fixture) {
         if (action === 'cloud/download') return { downloaded: body.paths.length, errors: [] };
         throw new Error('Unexpected fixture API: ' + action);
     }
-    const context = vm.createContext({ $: element, window: {}, confirm: () => true, console });
+    const context = vm.createContext({ $: element, window: {}, confirm: text => { confirmations.push(text); return true; }, console });
     const dependencies = {
         './api.js': { apiWithNames: api },
         './reload.js': { reloadTouched: async () => ({ ...reloadResult }) },
@@ -91,7 +92,7 @@ async function harness(initial = fixture) {
     await cloud.link(name => modules.get(name));
     await cloud.evaluate();
     return {
-        fn: cloud.namespace, panel: panel.namespace, ui, calls, handlers, element, reloadResult,
+        fn: cloud.namespace, panel: panel.namespace, ui, calls, handlers, element, reloadResult, confirmations,
         group: name => groups.find(group => group.dataset.group === name),
         replaceFiles: value => { files = structuredClone(value); },
         async search(word) { element('#stcb-cloud-search').val(word); cloud.namespace.renderCloud(); },
@@ -241,4 +242,36 @@ test('云端下载合并刷新说明，部分失败及手动刷新提示都会�
     assert.match(h.ui.get('#stcb-cloud-status').text, /角色列表已刷新。请刷新页面加载快速回复/);
     await h.fn.refreshCloud(false);
     assert.match(h.ui.get('#stcb-cloud-status').text, /失败 1 个/);
+});
+
+test('覆盖默认关闭，开关与确认说明、请求参数一致且不改变选择', async () => {
+    const h = await harness();
+    await h.fn.refreshCloud();
+    h.fn.toggleItem('美化/themes/深色.json', true);
+    await h.fn.downloadSelected();
+    assert.equal(h.calls.at(-1).body.overwrite, false);
+    assert.match(h.confirmations.at(-1), /角色卡和用户人设保留同名/);
+    assert.match(h.confirmations.at(-1), /（1）、（2）/);
+    assert.equal(h.fn.toggleOverwrite(), true);
+    assert.equal(h.ui.get('#stcb-cloud-overwrite').attrs['aria-pressed'], 'true');
+    await h.fn.refreshCloud();
+    await h.fn.downloadSelected();
+    assert.equal(h.calls.at(-1).body.overwrite, true);
+    assert.deepEqual(Array.from(h.calls.at(-1).body.paths), ['美化/themes/深色.json']);
+    assert.match(h.confirmations.at(-1), /同名文件将被覆盖/);
+    assert.equal(h.fn.toggleOverwrite(), false);
+    assert.equal(h.ui.get('#stcb-cloud-overwrite').attrs['aria-pressed'], 'false');
+    await h.fn.downloadSelected();
+    assert.equal(h.calls.at(-1).body.overwrite, false);
+});
+
+test('操作中禁用覆盖开关且保持本次下载策略', async () => {
+    const h = await harness();
+    await h.fn.refreshCloud();
+    h.panel.setBusy(true);
+    assert.equal(h.ui.get('#stcb-cloud-overwrite').props.disabled, true);
+    assert.equal(h.fn.toggleOverwrite(), false);
+    h.panel.setBusy(false);
+    assert.equal(h.ui.get('#stcb-cloud-overwrite').props.disabled, false);
+    assert.equal(h.fn.toggleOverwrite(), true);
 });

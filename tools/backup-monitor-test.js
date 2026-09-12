@@ -145,7 +145,7 @@ test('自动检查与上传记录', async t => {
         });
 
         await t.test('无法导入的云端文件直接报错', async () => {
-            const result = await call('/cloud/download', { paths: ['.st-sync/index.json'] });
+            const result = await call('/cloud/download', { paths: ['.st-sync/index.json'], overwrite: true });
             assert.equal(result.downloaded, 0);
             assert.equal(result.errors.length, 1);
             assert.match(result.errors[0].error, /无法导入/);

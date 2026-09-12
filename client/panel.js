@@ -217,6 +217,9 @@ export function buildPanel() {
                 button('stcb-cloud-delete', 'fa-trash-can', '删除', 'danger'),
             ),
             row('stcb-actions stcb-cloud-actions',
+                '<button type="button" id="stcb-cloud-overwrite" class="menu_button"'
+                + ' aria-label="覆盖本地" aria-pressed="false" title="覆盖已关闭：角色卡、人设保留同名；其他重名内容加（1）、（2）">'
+                + '<span>覆盖</span></button>',
                 button('stcb-cloud-sort', 'fa-arrow-down-short-wide', '按路径'),
                 button('stcb-cloud-current', 'fa-user', '当前'),
             ),

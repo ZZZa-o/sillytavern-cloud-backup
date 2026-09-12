@@ -512,7 +512,7 @@ async function runDownload(user, config, names) {
  * 写入下载内容并记录类别。
  * 合成文件按条目合并，普通文件直接写盘；两种下载入口共用此函数。
  */
-async function applyDownloaded(directories, localRel, buffer, result) {
+async function applyDownloaded(directories, localRel, buffer, result, { overwrite = true } = {}) {
     let absPath;
     if (synthetic.isSynthetic(localRel)) {
         const merged = synthetic.merge(localRel, directories, buffer);
@@ -520,18 +520,18 @@ async function applyDownloaded(directories, localRel, buffer, result) {
         if (paths.categoryOf(localRel) === 'personas') result.personaData = merged.data;
         absPath = merged.absPath;
     } else {
-        absPath = await writeLocal(directories, localRel, buffer);
+        absPath = await writeLocal(directories, localRel, buffer, overwrite);
     }
     noteTouched(result, localRel);
     return absPath;
 }
 
-/** 写入本地文件，同名直接覆盖。 */
-async function writeLocal(directories, localRel, buffer) {
+/** 保留副本时排他创建，防止分配文件名后出现的新文件被覆盖。 */
+async function writeLocal(directories, localRel, buffer, overwrite) {
     const absPath = paths.localAbsPath(directories, localRel);
     if (!absPath) throw new Error(`无法解析本地路径：${localRel}`);
     await fs.promises.mkdir(path.dirname(absPath), { recursive: true });
-    await fs.promises.writeFile(absPath, buffer);
+    await fs.promises.writeFile(absPath, buffer, { flag: overwrite ? 'w' : 'wx' });
     return absPath;
 }
 

@@ -40,6 +40,18 @@ let sortMode = 'path';
 // 默认联动选择角色卡及其聊天记录。
 let linkChats = true;
 
+// 默认关闭覆盖。
+let overwriteLocal = false;
+
+export function toggleOverwrite() {
+    if (isBusy()) return overwriteLocal;
+    overwriteLocal = !overwriteLocal;
+    $('#stcb-cloud-overwrite').attr('aria-pressed', String(overwriteLocal)).attr('title', overwriteLocal
+        ? '覆盖已开启：下载时替换本地对应内容'
+        : '覆盖已关闭：角色卡、人设保留同名；其他重名内容加（1）、（2）');
+    return overwriteLocal;
+}
+
 function keyword() {
     return $('#stcb-cloud-search').val()?.toString().trim().toLowerCase() ?? '';
 }
@@ -368,10 +380,14 @@ export async function downloadSelected() {
         setCloudStatus('请先选择要下载的文件。', 'warn');
         return;
     }
-    if (!confirm(`下载选中的 ${paths.length} 个文件？本机同名文件将被覆盖，不保留副本。`)) return;
+    const overwrite = overwriteLocal;
+    const policy = overwrite
+        ? '本机同名文件将被覆盖，不保留副本。'
+        : '保留本地内容。角色卡和用户人设保留同名，其他重名内容自动加（1）、（2）。';
+    if (!confirm(`下载选中的 ${paths.length} 个文件？${policy}`)) return;
 
     await withBusy('正在下载云端文件...', async () => {
-        const data = await apiWithNames('cloud/download', { paths });
+        const data = await apiWithNames('cloud/download', { paths, overwrite });
         const reload = await reloadTouched(data);
 
         const extra = [];

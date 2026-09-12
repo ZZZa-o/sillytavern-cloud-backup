@@ -206,8 +206,12 @@ function init(router) {
     }));
 
     router.post('/cloud/download', (request, response) => handle(response, async () => {
+        const overwrite = request.body?.overwrite;
+        if (typeof overwrite !== 'boolean') throw new Error('下载覆盖选项无效。');
         const config = await connectionFor(request, 'read');
-        return await cloud.download(request.user, config, readNames(request), readPaths(request));
+        return await cloud.download(request.user, config, readNames(request), readPaths(request), {
+            overwrite,
+        });
     }));
 
     router.post('/cloud/delete', (request, response) => handle(response, async () => {
